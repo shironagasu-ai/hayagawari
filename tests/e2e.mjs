@@ -2,7 +2,7 @@
 // 依存: playwright-core（または playwright）。Chromium 実体は CHROMIUM_PATH で指定可。
 // 出力: tests/output/ にスクリーンショット（.gitignore 済み）
 import { createServer } from 'http';
-import { readFileSync, existsSync, statSync, mkdirSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, statSync, mkdirSync } from 'fs';
 import { join, dirname, extname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -53,6 +53,37 @@ const renderStats = (page, t) => page.evaluate((t) => {
   const mean = sum / n;
   return { mean, std: Math.sqrt(Math.max(0, sum2 / n - mean * mean)) };
 }, t);
+
+
+// 指定した区間の複数時刻をまとめて1枚のシートに（目視確認用）
+async function sheet(page, file, rows) {
+  const png = await page.evaluate((rows) => {
+    const cols = Math.max(...rows.map((r) => r.times.length));
+    const tw = 256, th = Math.round(256 * 9 / 16);
+    const c = document.createElement('canvas');
+    c.width = cols * tw; c.height = rows.length * (th + 16);
+    const g = c.getContext('2d');
+    g.fillStyle = '#111'; g.fillRect(0, 0, c.width, c.height);
+    g.font = '12px monospace';
+    rows.forEach((row, j) => {
+      window.__hg.setOpt(row.key, row.value);
+      window.__hg.build();
+      const f = window.__hg.state.film;
+      const seg = f.segments[row.seg === 'last' ? f.segments.length - 1 : row.seg];
+      row.times.forEach((ft, i) => {
+        window.__hg.renderAt(seg.start + seg.dur * ft);
+        const gl = document.querySelector('#gl');
+        const a = gl.width / gl.height;
+        const w = a > 16 / 9 ? tw - 2 : (th * a), h = a > 16 / 9 ? (tw - 2) / a : th;
+        g.drawImage(gl, i * tw + (tw - w) / 2, j * (th + 16) + 16 + (th - h) / 2, w, h);
+      });
+      g.fillStyle = '#fff';
+      g.fillText(`${row.value}  (${seg.kind}:${seg.variant || ''})`, 4, j * (th + 16) + 12);
+    });
+    return c.toDataURL('image/png');
+  }, rows);
+  writeFileSync(join(outDir, file), Buffer.from(png.split(',')[1], 'base64'));
+}
 
 // ---- 1. 16:9 でサンプル読み込み → 生成 → 各時刻の描画
 {
@@ -134,6 +165,70 @@ const renderStats = (page, t) => page.evaluate((t) => {
     await page.evaluate((t) => window.__hg.renderAt(t), d * 0.37);
     await page.screenshot({ path: join(outDir, `theme-${th}.png`) });
   }
+  // オープニング / エンディング / 振付を全種描いて確認
+  const T = [0.08, 0.2, 0.35, 0.5, 0.65, 0.8, 0.95];
+  const opKeys = ['montage', 'type', 'shutter', 'countdown', 'knockout'];
+  const clKeys = ['grid', 'filmstrip', 'stack', 'knockout'];
+  const vKeys = await page.evaluate(async () => (await import('/src/director.js')).VARIANT_KEYS());
+  await page.evaluate(() => { window.__hg.setOpt('style', 'NOIR'); window.__hg.setSeed('COVER-01'); });
+  await sheet(page, 'sheet-openers.png', opKeys.map((k) => ({ key: 'opener', value: k, seg: 0, times: T })));
+  await sheet(page, 'sheet-closers.png', clKeys.map((k) => ({ key: 'closer', value: k, seg: 'last', times: T })));
+  await sheet(page, 'sheet-variants.png', vKeys.map((k) => ({ key: 'variant', value: k, seg: 1, times: T })));
+  const picked = await page.evaluate(() => { const f = window.__hg.state.film; return [f.opener, f.closer, f.segments[1].variant]; });
+  check('opener/closer/variant overrides applied', picked[0] === 'knockout' && picked[1] === 'knockout' && picked[2] === vKeys[vKeys.length - 1], picked.join(','));
+  check('9 choreographies available', vKeys.length >= 9, vKeys.join(','));
+  // 自動選択に戻したとき、シードで全パターンが出うる
+  const seen = await page.evaluate(() => {
+    window.__hg.setOpt('opener', 'auto'); window.__hg.setOpt('closer', 'auto'); window.__hg.setOpt('variant', null);
+    const o = new Set(), c = new Set(), v = new Set(), tr = new Set();
+    for (let i = 0; i < 60; i++) {
+      window.__hg.setSeed('S' + i); window.__hg.setOpt('style', 'auto'); window.__hg.build();
+      const f = window.__hg.state.film;
+      o.add(f.opener); c.add(f.closer);
+      f.summary.forEach((s) => { if (s.variant) v.add(s.variant); if (s.out) tr.add(s.out); });
+    }
+    return { o: o.size, c: c.size, v: v.size, tr: [...tr].sort().join(',') };
+  });
+  console.log('auto coverage:', JSON.stringify(seen));
+  check('auto picks all openers/closers', seen.o === 5 && seen.c === 4);
+  check('auto uses new transitions', seen.tr.includes('spin') && seen.tr.includes('door'));
+
+  // 注目点エディタ: 開く → ドラッグ移動 → 追加 → 1番にする → 削除 → 自動に戻す
+  await page.evaluate(() => window.__hg.toEditor());
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('#editor')).opacity === '1');
+  await page.click('.work:nth-child(2) .thumb');
+  await page.waitForSelector('#fe:not([hidden])');
+  const box = await page.locator('#fe-stage').boundingBox();
+  const p0 = await page.evaluate(() => ({ ...window.__hg.state.works[1].focal[0] }));
+  const px = box.x + p0.x * box.width, py = box.y + p0.y * box.height;
+  await page.mouse.move(px, py); await page.mouse.down();
+  await page.mouse.move(box.x + box.width * 0.2, box.y + box.height * 0.8, { steps: 5 }); await page.mouse.up();
+  let fw = await page.evaluate(() => window.__hg.state.works[1].focal.map((f) => ({ ...f })));
+  check('focal drag moves point #1', Math.abs(fw[0].x - 0.2) < 0.03 && Math.abs(fw[0].y - 0.8) < 0.03 && fw[0].manual, JSON.stringify(fw[0]));
+  const nBefore = fw.length;
+  if (nBefore >= 4) await page.click('#fe-del');
+  await page.mouse.click(box.x + box.width * 0.9, box.y + box.height * 0.1);
+  fw = await page.evaluate(() => window.__hg.state.works[1].focal.map((f) => ({ ...f })));
+  const added = fw[fw.length - 1];
+  check('click on empty area adds point', Math.abs(added.x - 0.9) < 0.03 && Math.abs(added.y - 0.1) < 0.03);
+  await page.click('#fe-top');
+  fw = await page.evaluate(() => window.__hg.state.works[1].focal.map((f) => ({ ...f })));
+  check('make #1 moves selected to front', Math.abs(fw[0].x - 0.9) < 0.03);
+  await page.fill('#fe-size', '0.1');
+  await page.dispatchEvent('#fe-size', 'input');
+  fw = await page.evaluate(() => window.__hg.state.works[1].focal.map((f) => ({ ...f })));
+  check('size slider edits selected', Math.abs(fw[0].size - 0.1) < 1e-6);
+  await page.screenshot({ path: join(outDir, 'focal-editor.png') });
+  const nNow = fw.length;
+  await page.click('#fe-del');
+  fw = await page.evaluate(() => window.__hg.state.works[1].focal.length);
+  check('delete removes point', fw === nNow - 1);
+  await page.click('#fe-reset');
+  const reset = await page.evaluate(() => { const w = window.__hg.state.works[1]; return JSON.stringify(w.focal) === JSON.stringify(w.autoFocal); });
+  check('reset restores auto points', reset);
+  await page.keyboard.press('Escape');
+  check('editor closes', await page.evaluate(() => document.querySelector('#fe').hidden));
+
   check('no page errors (16:9)', errors.length === 0, errors.join('\n'));
   await page.close();
 }

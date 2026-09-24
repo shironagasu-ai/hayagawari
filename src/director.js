@@ -6,7 +6,11 @@
 // - 画像解析の注目点（focal）を寄り・カット割り・パン・コールアウトの着地点に使う
 
 import { createRng } from './rng.js';
-import { rgbToHsl, hslToRgb } from './analyze.js';
+import {
+  pad2, TAU, lum, withA, colorsFor, pointsFor, camLerp, clampFull, closeHq, drawCam, coverUV, panelZoom,
+  drawText, textH, textW, layoutFor, makeTextBlock,
+} from './kit.js';
+import { OPENERS, CLOSERS, circleP } from './bookends.js';
 import {
   clamp, lerp, prog, quadOut, expoIn, expoOut, expoInOut,
   backOut, snap, snapSoft, antic,
@@ -14,40 +18,42 @@ import {
 
 // ---------------------------------------------------------------- テーマ
 
+export const VARIANT_KEYS = () => Object.keys(VARIANTS);
+
 export const THEMES = {
   NOIR: {
     label: 'NOIR', bg: 'dark', font: 'sans', weight: 800, tracking: 0.01, upper: true,
     grain: 0.05, vignette: 0.45, hud: true, bpm: [116, 128],
-    variants: { focus: 3, cuts: 3, split: 2, pan: 2, card: 1 },
-    trans: { whip: 3, zoom: 3, iris: 1, slices: 2, glitch: 1, bars: 2, cut: 2 },
+    variants: { focus: 3, cuts: 3, split: 2, pan: 2, card: 1, spotlight: 3, lockon: 2, mosaic: 1, triptych: 2 },
+    trans: { whip: 3, zoom: 3, iris: 1, slices: 2, glitch: 1, bars: 2, cut: 2, spin: 1, door: 1 },
     decor: { number: 2, marquee: 2, grid: 1, blur: 3, stripes: 1, dots: 0 },
   },
   SWISS: {
     label: 'SWISS', bg: 'light', font: 'sans', weight: 800, tracking: -0.01, upper: true,
     grain: 0.025, vignette: 0.0, hud: true, bpm: [118, 130],
-    variants: { cuts: 3, split: 3, card: 2, focus: 2, pan: 1 },
-    trans: { whip: 3, bars: 3, slices: 3, cut: 2, zoom: 1, iris: 1 },
+    variants: { cuts: 3, split: 3, card: 2, focus: 2, pan: 1, mosaic: 3, triptych: 3, lockon: 2, spotlight: 1 },
+    trans: { whip: 3, bars: 3, slices: 3, cut: 2, zoom: 1, iris: 1, door: 2, spin: 1 },
     decor: { grid: 3, number: 3, stripes: 1, marquee: 1, dots: 1 },
   },
   POP: {
     label: 'POP', bg: 'accent', font: 'condensed', weight: 900, tracking: 0.02, upper: true,
     grain: 0.03, vignette: 0.15, hud: true, bpm: [124, 136],
-    variants: { card: 3, cuts: 3, focus: 2, split: 1, pan: 1 },
-    trans: { iris: 3, whip: 2, bars: 3, zoom: 2, slices: 2, cut: 1 },
+    variants: { card: 3, cuts: 3, focus: 2, split: 1, pan: 1, mosaic: 3, triptych: 2, spotlight: 2, lockon: 1 },
+    trans: { iris: 3, whip: 2, bars: 3, zoom: 2, slices: 2, cut: 1, spin: 3, door: 2 },
     decor: { stripes: 3, dots: 3, marquee: 2, number: 1 },
   },
   EDITORIAL: {
     label: 'EDITORIAL', bg: 'light', font: 'serif', weight: 500, tracking: 0.0, upper: false,
     grain: 0.035, vignette: 0.1, hud: true, bpm: [108, 120],
-    variants: { focus: 3, split: 3, pan: 3, card: 2, cuts: 1 },
-    trans: { whip: 2, slices: 2, iris: 1, zoom: 2, bars: 1, cut: 2 },
+    variants: { focus: 3, split: 3, pan: 3, card: 2, cuts: 1, triptych: 3, spotlight: 2, lockon: 1, mosaic: 1 },
+    trans: { whip: 2, slices: 2, iris: 1, zoom: 2, bars: 1, cut: 2, door: 2 },
     decor: { number: 3, grid: 2, blur: 1, marquee: 1 },
   },
   GLITCH: {
     label: 'GLITCH', bg: 'dark', font: 'mono', weight: 700, tracking: 0.04, upper: true,
     grain: 0.08, vignette: 0.4, hud: true, bpm: [126, 140], aberrBase: 0.6,
-    variants: { cuts: 4, focus: 3, pan: 2, split: 2, card: 1 },
-    trans: { glitch: 4, whip: 2, slices: 3, zoom: 2, cut: 3 },
+    variants: { cuts: 4, focus: 3, pan: 2, split: 2, card: 1, lockon: 4, mosaic: 2, spotlight: 2, triptych: 1 },
+    trans: { glitch: 4, whip: 2, slices: 3, zoom: 2, cut: 3, spin: 2, door: 1 },
     decor: { grid: 3, marquee: 2, number: 2, blur: 2, dots: 1 },
   },
 };
@@ -57,208 +63,6 @@ const PACE = {
   normal: { beats: 8, bpm: 0 },
   relaxed: { beats: 10, bpm: -10 },
 };
-
-// ---------------------------------------------------------------- 小道具
-
-const pad2 = (n) => String(n).padStart(2, '0');
-const TAU = Math.PI * 2;
-const lum = (c) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
-const mix = (a, b, t) => [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)];
-const hsl = (h, s, l) => hslToRgb([h, s, l]).map((v) => v / 255);
-const withA = (c, a) => [c[0], c[1], c[2], a];
-
-function fitIn(aspect, bw, bh) {
-  return aspect > bw / bh ? { w: bw, h: bw / aspect } : { w: bh * aspect, h: bh };
-}
-
-// 作品ごとの配色（テーマの背景モードとパレットから）
-function colorsFor(work, theme) {
-  const R = work.roles;
-  const [dh, ds] = rgbToHsl(R.dominant.map((v) => v * 255));
-  const [ah] = rgbToHsl(R.accent.map((v) => v * 255));
-  let bg, ink, accent = R.accent.slice();
-  if (theme.bg === 'dark') {
-    bg = hsl(dh, Math.min(ds, 0.35), 0.075);
-    ink = [0.95, 0.95, 0.94];
-  } else if (theme.bg === 'light') {
-    bg = hsl(dh, Math.min(ds, 0.3) * 0.5, 0.925);
-    ink = hsl(ah, 0.25, 0.09);
-  } else {
-    bg = hsl(ah, 0.72, 0.52);
-    ink = lum(bg) > 0.5 ? hsl(ah, 0.4, 0.08) : [0.98, 0.97, 0.95];
-    // POP: アクセントは補色寄り
-    accent = hsl((ah + 0.5) % 1, 0.8, lum(bg) > 0.5 ? 0.35 : 0.6);
-  }
-  // アクセントが背景に沈む場合は明度をずらす
-  if (Math.abs(lum(accent) - lum(bg)) < 0.22) {
-    const [h, s, l] = rgbToHsl(accent.map((v) => v * 255));
-    accent = hsl(h, s, lum(bg) > 0.5 ? Math.max(0.2, l - 0.3) : Math.min(0.8, l + 0.3));
-  }
-  return { bg, ink, accent, deco: theme.bg === 'accent' ? mix(bg, ink, 0.22) : accent };
-}
-
-// 注目点を n 個そろえる（足りなければ近傍にずらした点を足す）
-function pointsFor(work, n, rng) {
-  const src = work.focal.length ? work.focal : [{ x: 0.5, y: 0.42, size: 0.35, strength: 1 }];
-  const out = [];
-  for (let i = 0; i < n; i++) {
-    const f = src[i % src.length];
-    if (i < src.length) out.push({ ...f });
-    else {
-      const a = rng.range(0, TAU), d = rng.range(0.12, 0.22);
-      out.push({ ...f, x: clamp(f.x + Math.cos(a) * d, 0.12, 0.88), y: clamp(f.y + Math.sin(a) * d, 0.12, 0.88), size: f.size * rng.range(0.8, 1.2) });
-    }
-  }
-  return out;
-}
-
-// ---------------------------------------------------------------- 画像カメラ
-// 「画像上の点 (ix,iy) を画面の (sx,sy) に置き、画像の高さを hq px にする」で画像の見え方を表す。
-// 寄り（全面）と引き（枠内）の間を log 補間するだけで自然なズームになる。
-
-function camQuad(work, c) {
-  const hq = c.hq, wq = hq * work.aspect;
-  return { x: c.sx - (c.ix - 0.5) * wq, y: c.sy - (c.iy - 0.5) * hq, w: wq, h: hq };
-}
-
-function camLerp(a, b, e) {
-  return {
-    ix: lerp(a.ix, b.ix, e), iy: lerp(a.iy, b.iy, e),
-    sx: lerp(a.sx, b.sx, e), sy: lerp(a.sy, b.sy, e),
-    hq: Math.exp(lerp(Math.log(a.hq), Math.log(b.hq), e)),
-  };
-}
-
-// 全面表示で画像の端が見えないよう注目点側を寄せる
-function clampFull(work, c, W, H) {
-  const hq = Math.max(c.hq, H, W / work.aspect);
-  const wq = hq * work.aspect;
-  // 左端条件: sx - ix*wq <= 0 → ix >= sx/wq ／ 右端条件: sx + (1-ix)*wq >= W → ix <= 1 - (W-sx)/wq
-  const ix = clamp(c.ix, c.sx / wq, 1 - (W - c.sx) / wq);
-  const iy = clamp(c.iy, c.sy / hq, 1 - (H - c.sy) / hq);
-  return { ...c, ix, iy, hq };
-}
-
-// 注目点へのズーム量: 注目領域が画面短辺の ~80% に収まる高さ。解像度で上限
-function closeHq(work, f, W, H, mul = 1) {
-  const coverHq = Math.max(H, W / work.aspect);
-  const shortFrac = f.size * Math.min(1, work.aspect); // 画像高さに対する注目領域の比
-  let hq = (Math.min(W, H) * 0.85) / Math.max(0.08, shortFrac) * mul;
-  const maxHq = work.height / 0.5; // テクセル密度 0.5 まで（それ以上はボケる）
-  hq = Math.min(hq, Math.max(coverHq * 1.35, maxHq));
-  return Math.max(hq, coverHq * 1.35);
-}
-
-function drawCam(r, work, c, prev, o = {}) {
-  const q = camQuad(work, c);
-  let blur;
-  if (prev) {
-    const p = camQuad(work, prev);
-    // 1フレーム分の移動量をテクスチャ uv に換算して方向ブラー（シャッター 360°相当）
-    const k = o.shutter ?? 1;
-    const dx = (q.x - p.x) / q.w, dy = (q.y - p.y) / q.h;
-    if (Math.abs(dx) + Math.abs(dy) > 0.0004) blur = [-dx * k, -dy * k];
-  }
-  r.draw({ x: q.x, y: q.y, w: q.w, h: q.h, tex: work.tex, blur, mask: o.mask, alpha: o.alpha, color: o.color, rot: o.rot });
-  return q;
-}
-
-// ウィンドウ（パネル）内に注目点を中心として表示する uv 矩形
-function coverUV(work, winW, winH, fx, fy, z) {
-  const wa = winW / winH, ia = work.aspect;
-  let uw, uh;
-  if (ia > wa) { uh = 1; uw = wa / ia; } else { uw = 1; uh = ia / wa; }
-  uw /= z; uh /= z;
-  const u0 = uw <= 1 ? clamp(fx - uw / 2, 0, 1 - uw) : fx - uw / 2;
-  const v0 = uh <= 1 ? clamp(fy - uh / 2, 0, 1 - uh) : fy - uh / 2;
-  return [u0, v0, u0 + uw, v0 + uh];
-}
-
-function panelZoom(work, f, winW, winH, mul = 1) {
-  const wa = winW / winH, ia = work.aspect;
-  const uh = ia > wa ? 1 : ia / wa; // z=1 のときの可視高さ比
-  const want = f.size * Math.min(1, ia) * 1.2;
-  let z = (uh / Math.max(0.08, want)) * mul;
-  const zMax = Math.max(1.2, (uh * work.height) / (winH * 0.5));
-  return clamp(z, 1.15, zMax);
-}
-
-// ---------------------------------------------------------------- 文字
-
-function drawText(r, T, x, y, o = {}) {
-  // (x,y) はグリフ枠の左上（右揃えなら右上）。テクスチャの余白を差し引いて配置
-  const s = o.scale ?? 1;
-  const gw = (T.w - 2 * T.pad) * s;
-  const left = o.align === 'right' ? x - gw : o.align === 'center' ? x - gw / 2 : x;
-  const cx = left - T.pad * s + (T.w * s) / 2;
-  const cy = y - T.pad * s + (T.h * s) / 2;
-  // reveal: 0→1 で下から枠内にせり上がる / leave: 0→1 で上へ抜ける
-  const rv = o.reveal ?? 1, lv = o.leave ?? 0;
-  if (rv <= 0 || lv >= 1) return;
-  const v0 = lv > 0 ? lv : rv - 1;
-  r.draw({
-    x: cx, y: cy, w: T.w * s, h: T.h * s, tex: T.tex, uv: [0, v0, 1, v0 + 1],
-    color: o.color, alpha: o.alpha, mask: o.mask, rot: o.rot,
-  });
-}
-
-const textH = (T, s = 1) => (T.h - 2 * T.pad) * s;
-const textW = (T, s = 1) => (T.w - 2 * T.pad) * s;
-
-// ---------------------------------------------------------------- レイアウト
-
-function layoutFor(work, W, H, side) {
-  const minDim = Math.min(W, H);
-  const land = W / H > 1.2;
-  const a = work.aspect;
-  if (land && (a > 1.45 || side === 'center')) {
-    const b = fitIn(a, W * 0.74, H * 0.62);
-    const img = { x: W / 2, y: H * 0.43, w: b.w, h: b.h };
-    return { img, side: 'center', text: { x: img.x - b.w / 2, y: img.y + b.h / 2 + minDim * 0.05, maxW: b.w, stack: 'below' } };
-  }
-  if (land) {
-    const b = fitIn(a, W * 0.5, H * 0.8);
-    const cx = side === 'left' ? W * 0.34 : W * 0.66;
-    const img = { x: cx, y: H * 0.5, w: b.w, h: b.h };
-    const tx = side === 'left' ? cx + b.w / 2 + W * 0.05 : W * 0.07;
-    const maxW = side === 'left' ? W * 0.94 - tx : cx - b.w / 2 - W * 0.05 - tx;
-    return { img, side, text: { x: tx, y: img.y + b.h / 2, maxW, stack: 'side' } };
-  }
-  const portrait = W / H < 0.8;
-  const b = fitIn(a, W * 0.84, H * (portrait ? 0.58 : 0.62));
-  const img = { x: W / 2, y: H * (portrait ? 0.4 : 0.42), w: b.w, h: b.h };
-  return { img, side: 'center', text: { x: Math.max(W * 0.08, img.x - b.w / 2), y: img.y + b.h / 2 + minDim * 0.05, maxW: W * 0.84, stack: 'below' } };
-}
-
-// タイトル・番号・メタ情報のブロック
-function makeTextBlock(S) {
-  const { tf, theme, work, idx, total, artist, minDim, layout, year } = S;
-  const up = (s) => (theme.upper ? s.toUpperCase() : s);
-  const side = layout.text.stack === 'side';
-  const titleSize = Math.round(minDim * (side ? 0.08 : 0.066));
-  const T = tf.get(up(work.title), { family: theme.font, size: titleSize, weight: theme.weight, tracking: theme.tracking });
-  const I = tf.get(`No.${pad2(idx + 1)}`, { family: 'mono', size: Math.round(minDim * 0.022), weight: 700, tracking: 0.18 });
-  const meta = [artist ? up(artist) : null, String(year)].filter(Boolean).join('  /  ');
-  const M = tf.get(meta, { family: 'mono', size: Math.round(minDim * 0.017), weight: 500, tracking: 0.14 });
-  const scale = Math.min(1, layout.text.maxW / Math.max(1, textW(T)));
-  const gap = minDim * 0.018;
-  const total_h = textH(I) + gap + textH(T, scale) + gap * 1.3 + textH(M);
-  const y0 = side ? layout.text.y - total_h : layout.text.y;
-  const barW = minDim * 0.05;
-  return (r, t, t0, col) => {
-    const x = layout.text.x;
-    let y = y0;
-    const e = (d) => expoOut(prog(t, t0 + d, t0 + d + 0.55));
-    // アクセントの短い線（左から伸びる）
-    const eb = snapSoft(prog(t, t0, t0 + 0.45));
-    if (eb > 0) r.draw({ x: x + (barW * eb) / 2, y: y + textH(I) / 2, w: barW * eb, h: Math.max(3, minDim * 0.004), color: col.accent });
-    drawText(r, I, x + barW + minDim * 0.015, y, { reveal: e(0.05), color: col.accent });
-    y += textH(I) + gap;
-    drawText(r, T, x, y, { reveal: e(0.1), scale, color: col.ink });
-    y += textH(T, scale) + gap * 1.3;
-    drawText(r, M, x, y, { reveal: e(0.18), color: withA(col.ink, 0.6) });
-  };
-}
 
 // ---------------------------------------------------------------- 背景装飾
 
@@ -632,6 +436,171 @@ const VARIANTS = {
       text(r, t, 0.55, col);
     };
   },
+
+  // タイル状に分解した絵が、注目点に近い順に飛んできて組み上がり、最後にカチッと詰まる
+  mosaic(S) {
+    const { work, W, H, beat, D, layout, rng, points, minDim } = S;
+    const img = layout.img;
+    const cols = work.aspect >= 1 ? rng.int(4, 6) : rng.int(3, 4);
+    const rows = Math.max(2, Math.round(cols / work.aspect));
+    const f = points[0];
+    const tw = img.w / cols, th = img.h / rows;
+    const gap0 = minDim * 0.012;
+    const tiles = [];
+    let maxD = 0;
+    for (let j = 0; j < rows; j++) {
+      for (let i = 0; i < cols; i++) {
+        const u = (i + 0.5) / cols, v = (j + 0.5) / rows;
+        const d = Math.hypot(u - f.x, (v - f.y) / work.aspect);
+        maxD = Math.max(maxD, d);
+        const a = rng.range(0, TAU);
+        tiles.push({ i, j, d, ox: Math.cos(a) * minDim * rng.range(0.25, 0.5), oy: Math.sin(a) * minDim * rng.range(0.25, 0.5), rot: rng.range(-0.6, 0.6), focal: Math.floor(f.x * cols) === i && Math.floor(f.y * rows) === j });
+      }
+    }
+    const tLock = Math.min(D - 1.4, beat * 2.5);
+    S.event(tLock, 'shake', 5, 0.22);
+    S.event(tLock, 'aberr', 3, 0.3);
+    const text = makeTextBlock(S);
+    return (r, t, col) => {
+      const gap = gap0 * (1 - snap(prog(t, tLock - 0.25, tLock + 0.2)));
+      const drift = 1 + 0.025 * prog(t, tLock + 0.2, D);
+      for (const T of tiles) {
+        const delay = 0.05 + (T.d / (maxD || 1)) * 0.7;
+        const e = expoOut(prog(t, delay, delay + 0.5));
+        if (e <= 0) continue;
+        const sc = backOut(prog(t, delay, delay + 0.45), 1.5);
+        const pop = T.focal ? 1 + 0.25 * Math.max(0, 1 - Math.abs(t - beat * 1.5) / 0.2) : 1;
+        const x = img.x + ((T.i + 0.5) * tw - img.w / 2 + (T.i - (cols - 1) / 2) * gap) * drift + T.ox * (1 - e);
+        const y = img.y + ((T.j + 0.5) * th - img.h / 2 + (T.j - (rows - 1) / 2) * gap) * drift + T.oy * (1 - e);
+        const w = tw * drift * sc * pop, h = th * drift * sc * pop;
+        if (T.focal && pop > 1) r.draw({ x, y, w: w + gap0 * 2, h: h + gap0 * 2, color: col.accent });
+        r.draw({ x, y, w: w + 0.6, h: h + 0.6, rot: T.rot * (1 - e), tex: work.tex, uv: [T.i / cols, T.j / rows, (T.i + 1) / cols, (T.j + 1) / rows] });
+      }
+      text(r, t, tLock + 0.15, col);
+    };
+  },
+
+  // 暗く沈めた絵にスポットライト。注目点を渡り歩いてから一気に全体を照らす
+  spotlight(S) {
+    const { work, W, H, beat, D, layout, points, minDim } = S;
+    const img = layout.img;
+    const p0 = points[0], p1 = points[1];
+    const t1 = beat * 1.25, tOpen = Math.min(D - 1.4, beat * 2.5);
+    S.event(t1, 'aberr', 2, 0.2);
+    S.event(tOpen, 'flash', 0.3, 0.16);
+    S.event(tOpen, 'aberr', 4, 0.35);
+    const short = Math.min(img.w, img.h);
+    const text = makeTextBlock(S);
+    return (r, t, col) => {
+      const s = 1 + 0.06 * (1 - expoOut(prog(t, 0, 1.2))) + 0.025 * prog(t, tOpen + 0.5, D);
+      const w = img.w * s, h = img.h * s;
+      const ein = expoOut(prog(t, 0, 0.5));
+      // 沈んだ全体
+      const dim = 1 - expoOut(prog(t, tOpen, tOpen + 0.5));
+      r.draw({ x: img.x, y: img.y, w, h, tex: work.tex, tint: [col.bg[0], col.bg[1], col.bg[2], 0.82 * dim], alpha: ein });
+      // スポット位置: p0 → (スナップ) → p1
+      const em = snap(prog(t, t1 - 0.15, t1 + 0.25));
+      const fx = lerp(p0.x, p1.x, em), fy = lerp(p0.y, p1.y, em);
+      const rad0 = Math.max(p0.size, 0.12) * short * 0.55, rad1 = Math.max(p1.size, 0.12) * short * 0.55;
+      const pulse = 1 + 0.04 * Math.sin(t * 9);
+      let rad = lerp(rad0, rad1, em) * pulse * expoOut(prog(t, 0.2, 0.55));
+      const open = expoOut(prog(t, tOpen, tOpen + 0.55));
+      const full = Math.hypot(w, h);
+      rad = lerp(rad, full, open);
+      if (rad > 0) {
+        r.draw({ x: img.x, y: img.y, w, h, tex: work.tex, mask: { type: 'circle', p: circleP(w, h, fx, fy, rad), cx: fx, cy: fy, soft: 3 } });
+        if (open < 1) {
+          const cx = img.x + (fx - 0.5) * w, cy = img.y + (fy - 0.5) * h;
+          const rr = rad + minDim * 0.012;
+          r.draw({ x: cx, y: cy, w: rr * 2, h: rr * 2, mode: 'ring', pat: [0, Math.max(2, minDim * 0.004), 0, 0], color: withA(col.accent, 1 - open) });
+        }
+      }
+      text(r, t, tOpen + 0.3, col);
+    };
+  },
+
+  // 3枚の短冊に分かれて入ってきて、溜めてから一気に合体
+  triptych(S) {
+    const { work, W, H, beat, D, layout, rng, minDim } = S;
+    const img = layout.img;
+    const n = 3;
+    const gap = minDim * 0.05;
+    const offs = [-1, 1, -1].map((k) => k * H * rng.range(0.06, 0.12));
+    const tJoin = Math.min(D - 1.4, beat * 2.5);
+    S.event(tJoin, 'shake', 6, 0.25);
+    S.event(tJoin, 'aberr', 4, 0.3);
+    const text = makeTextBlock(S);
+    return (r, t, col) => {
+      const ej = snap(prog(t, tJoin - 0.3, tJoin + 0.15));
+      const sw = img.w / n;
+      const drift = 1 + 0.025 * prog(t, tJoin + 0.2, D);
+      for (let k = 0; k < n; k++) {
+        const d = 0.05 + k * 0.08;
+        const ein = expoOut(prog(t, d, d + 0.6));
+        if (ein <= 0) continue;
+        const dir = k % 2 ? 1 : -1;
+        const apart = (1 - ej) * (1 + 0.15 * prog(t, 0.6, tJoin)); // 溜めの間は少しずつ離れる
+        const x = img.x + ((k + 0.5) * sw - img.w / 2) * drift + (k - 1) * gap * apart;
+        const y = img.y + offs[k] * apart + dir * H * (1 - ein);
+        const par = (offs[k] / img.h) * 0.4 * apart;
+        r.draw({ x, y, w: sw * drift + 0.6, h: img.h * drift, tex: work.tex, uv: [k / n, -par, (k + 1) / n, 1 - par] });
+      }
+      text(r, t, tJoin + 0.25, col);
+    };
+  },
+
+  // 注目点を順にロックオン（ブラケットが大きく出て、ピタッと締まる）
+  lockon(S) {
+    const { work, W, H, beat, D, layout, points, minDim, tf } = S;
+    const img = layout.img;
+    const n = Math.min(3, Math.max(1, work.focal.length));
+    const targets = points.slice(0, n).map((p, i) => ({
+      p, t: 0.6 + i * beat,
+      L: tf.get(`FOCUS ${pad2(i + 1)}`, { family: 'mono', size: Math.round(minDim * 0.017), weight: 700, tracking: 0.2 }),
+      V: tf.get(`X ${p.x.toFixed(2)} / Y ${p.y.toFixed(2)}`, { family: 'mono', size: Math.round(minDim * 0.014), weight: 500, tracking: 0.15 }),
+    }));
+    targets.forEach((T) => S.event(T.t + 0.25, 'aberr', 2, 0.2));
+    const tText = targets[n - 1].t + beat * 0.8;
+    const th = Math.max(2, minDim * 0.004);
+    const text = makeTextBlock(S);
+    const bracket = (r, cx, cy, bw, bh, color) => {
+      const L = Math.min(bw, bh) * 0.28;
+      for (const sx of [-1, 1]) for (const sy of [-1, 1]) {
+        const x = cx + sx * bw / 2, y = cy + sy * bh / 2;
+        r.draw({ x: x - sx * L / 2, y, w: L, h: th, color });
+        r.draw({ x, y: y - sy * L / 2, w: th, h: L, color });
+      }
+    };
+    return (r, t, col) => {
+      const s = 1 + 0.05 * (1 - expoOut(prog(t, 0, 0.7))) + 0.02 * prog(t, 0.7, D);
+      const w = img.w * s, h = img.h * s;
+      r.draw({ x: img.x, y: img.y, w, h, tex: work.tex, mask: { type: 'blinds', p: expoOut(prog(t, 0, 0.55)), angle: Math.PI / 2, count: 6, stagger: 0.5 } });
+      targets.forEach((T, i) => {
+        const lt = t - T.t;
+        if (lt < 0) return;
+        const e = expoOut(prog(lt, 0, 0.32));
+        const active = i === n - 1 || t < targets[i + 1].t;
+        const box = Math.max(T.p.size, 0.1) * Math.min(w, h) * 0.9;
+        const cx = img.x + (T.p.x - 0.5) * w, cy = img.y + (T.p.y - 0.5) * h;
+        const bw = lerp(w * 1.05, box, e), bh = lerp(h * 1.05, box, e);
+        const bx = lerp(img.x, cx, e), by = lerp(img.y, cy, e);
+        const c = active ? col.accent : withA(col.ink, 0.45);
+        bracket(r, bx, by, bw, bh, c);
+        // 十字の照準線（画像の端まで伸びる）
+        const el = snapSoft(prog(lt, 0.2, 0.5));
+        if (active && el > 0) {
+          r.draw({ x: cx, y: cy, w: w * el, h: 1.5, color: withA(col.accent, 0.5) });
+          r.draw({ x: cx, y: cy, w: 1.5, h: h * el, color: withA(col.accent, 0.5) });
+        }
+        // ラベルは現在のターゲットだけ（前のものは上へ抜ける）
+        const leave = active ? 0 : expoOut(prog(t, targets[i + 1].t, targets[i + 1].t + 0.3));
+        const lx = cx + bw / 2 + minDim * 0.015, ly = cy - bh / 2;
+        drawText(r, T.L, lx, ly, { reveal: expoOut(prog(lt, 0.25, 0.6)), leave, color: col.accent });
+        drawText(r, T.V, lx, ly + textH(T.L) + minDim * 0.01, { reveal: expoOut(prog(lt, 0.3, 0.65)), leave, color: withA(col.ink, 0.8) });
+      });
+      text(r, t, tText, col);
+    };
+  },
 };
 
 // ---------------------------------------------------------------- トランジション（出/入り）
@@ -687,6 +656,26 @@ function transitionHint(tr, phase, p, dt, W, H) {
       if (phase === 'in') { h.scale = 1 + 0.08 * (1 - expoOut(p)); }
       break;
     }
+    case 'spin': {
+      // 回りながら吸い込まれ、逆回転で飛び出してくる
+      if (phase === 'out') {
+        const e = antic(p, 0.3, 0.05);
+        h.rot = tr.spin * 0.9 * e;
+        h.scale = Math.exp(-Math.log(8) * e);
+        h.radial = clamp(expoIn(p) * 0.4, 0, 0.4);
+      } else {
+        const e = 1 - expoOut(p);
+        h.rot = -tr.spin * 0.9 * e;
+        h.scale = 1 + 2.2 * e;
+        h.radial = clamp(e * 0.4, 0, 0.4);
+      }
+      break;
+    }
+    case 'door': {
+      h.sliceAxis = 2;
+      h.sliceP = phase === 'out' ? antic(p, 0.3, 0.04) : 1 - expoOut(p);
+      break;
+    }
     default:
   }
   return h;
@@ -723,7 +712,7 @@ export function buildFilm(opts) {
     transitions.push({
       type, dx: d[0], dy: d[1],
       axis: rng.int(0, 1), count: rng.int(5, 9),
-      bars: rng.int(1, 4), barAngle: rng.pick([0, Math.PI, Math.PI / 2, -Math.PI / 2, Math.PI / 4, -Math.PI * 3 / 4]),
+      spin: rng.sign(), bars: rng.int(1, 4), barAngle: rng.pick([0, Math.PI, Math.PI / 2, -Math.PI / 2, Math.PI / 4, -Math.PI * 3 / 4]),
     });
     prevType = type;
   }
@@ -732,67 +721,16 @@ export function buildFilm(opts) {
   const addEvent = (t, kind, amt, dur, color) => events.push({ t, kind, amt, dur, color });
 
   // ---- オープニング
+  const C = {
+    works, W, H, beat, rng: rng.fork('bookends'), tf, theme, minDim, artist, subline, handle, year, up, ev: null,
+  };
+  const openerKey = OPENERS[opts.opener] ? opts.opener : rng.pick(Object.keys(OPENERS));
+  const closerKey = CLOSERS[opts.closer] ? opts.closer : rng.pick(Object.keys(CLOSERS));
   {
-    const D = beat * 6;
     const start = cursor;
-    const mont = Math.min(12, Math.max(6, works.length * 2));
-    const tName = beat * 2.5;
-    const montDur = tName / mont;
-    const shots = [];
-    for (let i = 0; i < mont; i++) {
-      const w = works[i % works.length];
-      const f = pointsFor(w, 1 + (i >> 1) % 3, rng)[(i >> 1) % 3] || w.focal[0];
-      shots.push({ w, f, win: rng.chance(0.4), rot: rng.chance(0.25) ? rng.sign() * 0.04 : 0, hq: closeHq(w, f, W, H, rng.range(0.6, 1.1)) });
-    }
-    const name = up(artist || 'PORTFOLIO');
-    let nameSize = Math.round(minDim * (W > H ? 0.16 : 0.13));
-    const NT = tf.get(name, { family: theme.font, size: nameSize, weight: theme.weight + 100 > 900 ? 900 : theme.weight + 100, tracking: theme.tracking });
-    const nScale = Math.min(1, (W * 0.84) / textW(NT));
-    const sub = up(subline || (artist ? `PORTFOLIO ${year}` : `SELECTED WORKS ${year}`));
-    const ST = tf.get(sub, { family: 'mono', size: Math.round(minDim * 0.024), weight: 600, tracking: 0.3 });
-    const CT = tf.get(`${pad2(works.length)} WORKS`, { family: 'mono', size: Math.round(minDim * 0.02), weight: 600, tracking: 0.25 });
-    const LT = tf.get('SELECTED WORKS', { family: 'mono', size: Math.round(minDim * 0.02), weight: 600, tracking: 0.4 });
-    for (let i = 1; i < mont; i++) addEvent(start + i * montDur, 'flash', 0.12, 0.08);
-    addEvent(start + tName, 'flash', 0.6, 0.22);
-    addEvent(start + tName, 'shake', 8, 0.3);
-    addEvent(start + tName, 'aberr', 6, 0.4);
-    const decor = rng.chance(0.5) ? DECORS.grid({ W, H, rng }) : null;
-    segments.push({
-      kind: 'opener', start, dur: D, col: globalCol, outT: transitions[0],
-      draw(r, t, col) {
-        if (t < tName) {
-          const i = Math.min(mont - 1, Math.floor(t / montDur));
-          const s = shots[i];
-          const lt = t - i * montDur;
-          const punch = 1 + 0.12 * (1 - expoOut(prog(lt, 0, montDur)));
-          if (s.win) {
-            const pw = W * 0.5, ph = H * 0.56;
-            const uv = coverUV(s.w, pw, ph, s.f.x, s.f.y, panelZoom(s.w, s.f, pw, ph) * punch);
-            r.draw({ x: W / 2, y: H / 2, w: pw, h: ph, tex: s.w.tex, uv, rot: s.rot });
-          } else {
-            r.cam.r = s.rot;
-            drawCam(r, s.w, clampFull(s.w, { ix: s.f.x, iy: s.f.y, sx: W / 2, sy: H / 2, hq: s.hq * punch }, W, H), null);
-            r.cam.r = 0;
-          }
-          const blink = Math.floor(t / (beat / 4)) % 2 === 0;
-          if (blink) drawText(r, LT, W / 2, H - minDim * 0.08, { align: 'center', color: withA([1, 1, 1], 0.9) });
-          return;
-        }
-        const lt = t - tName;
-        if (decor) decor(r, lt, D - tName, col);
-        const e = expoOut(prog(lt, 0, 0.6));
-        const s = nScale * (1 + 0.12 * (1 - expoOut(prog(lt, 0, 0.8))));
-        const nh = textH(NT, s);
-        const y = H / 2 - nh / 2 - minDim * 0.02;
-        drawText(r, NT, W / 2, y, { align: 'center', scale: s, reveal: e, color: col.ink });
-        const eb = snap(prog(lt, 0.15, 0.6));
-        const bw = textW(NT, nScale) * eb;
-        r.draw({ x: W / 2, y: y + nh + minDim * 0.035, w: bw, h: Math.max(4, minDim * 0.007), color: col.accent });
-        drawText(r, ST, W / 2, y + nh + minDim * 0.07, { align: 'center', reveal: expoOut(prog(lt, 0.3, 0.85)), color: col.ink });
-        drawText(r, CT, W / 2, y - minDim * 0.07, { align: 'center', reveal: expoOut(prog(lt, 0.4, 0.95)), color: withA(col.ink, 0.6) });
-      },
-    });
-    cursor += D;
+    const O = OPENERS[openerKey]({ ...C, ev: (t, kind, amt, dur, color) => addEvent(start + t, kind, amt, dur, color) });
+    segments.push({ kind: 'opener', variant: openerKey, start, dur: O.dur, col: globalCol, outT: transitions[0], draw: O.draw });
+    cursor += O.dur;
   }
 
   // ---- 作品
@@ -802,7 +740,8 @@ export function buildFilm(opts) {
     const D = beat * P.beats;
     const start = cursor;
     const srng = rng.fork('work' + idx);
-    const vkey = srng.weighted(theme.variants, varKeys.slice(-1));
+    // opts.variant はテスト・デバッグ用（全作品を指定の振付に固定）
+    const vkey = VARIANTS[opts.variant] ? (srng.next(), opts.variant) : srng.weighted(theme.variants, varKeys.slice(-1));
     varKeys.push(vkey);
     const side = srng.pick(['left', 'right']);
     const layout = layoutFor(work, W, H, idx % 2 ? (side === 'left' ? 'right' : 'left') : side);
@@ -827,68 +766,12 @@ export function buildFilm(opts) {
     cursor += D;
   });
 
-  // ---- エンディング（グリッド）
+  // ---- エンディング
   {
-    const D = beat * 8;
     const start = cursor;
-    const land = W / H > 1.2;
-    const n = works.length;
-    const grids = land
-      ? [[3, 2], [3, 2], [3, 2], [3, 2], [3, 2], [3, 2], [4, 2], [4, 2], [4, 3], [4, 3], [4, 3], [4, 3], [5, 3], [5, 3], [5, 3]]
-      : [[2, 3], [2, 3], [2, 3], [2, 3], [2, 3], [2, 3], [2, 4], [2, 4], [3, 4], [3, 4], [3, 4], [3, 4], [3, 5], [3, 5], [3, 5]];
-    const [cols, rows] = n <= grids.length ? grids[n - 1] : land ? [6, 4] : [4, 6];
-    const gap = minDim * 0.008;
-    const tiles = [];
-    const order = rng.shuffle([...Array(cols * rows).keys()]);
-    for (let j = 0; j < rows; j++) {
-      for (let i = 0; i < cols; i++) {
-        const k = j * cols + i;
-        const w = works[k % n];
-        const f = w.focal[Math.floor(k / n) % w.focal.length] || w.focal[0];
-        const tw_ = (W - gap * (cols + 1)) / cols, th_ = (H - gap * (rows + 1)) / rows;
-        tiles.push({
-          w, f, x: gap + tw_ / 2 + i * (tw_ + gap), y: gap + th_ / 2 + j * (th_ + gap), tw: tw_, th: th_,
-          delay: 0.05 + (order.indexOf(k) / (cols * rows)) * 1.1,
-          ang: rng.pick([0, Math.PI / 2, Math.PI, -Math.PI / 2]),
-          z: panelZoom(w, { ...f, size: Math.max(f.size, 0.45) }, tw_, th_, 1),
-        });
-      }
-    }
-    const tZoom = beat * 3;
-    const name = up(artist || 'PORTFOLIO');
-    const NT = tf.get(name, { family: theme.font, size: Math.round(minDim * 0.11), weight: theme.weight, tracking: theme.tracking });
-    const nScale = Math.min(1, (W * 0.8) / textW(NT));
-    const TY = tf.get('THANK YOU FOR WATCHING', { family: 'mono', size: Math.round(minDim * 0.022), weight: 600, tracking: 0.35 });
-    const HT = handle ? tf.get(handle, { family: 'mono', size: Math.round(minDim * 0.026), weight: 700, tracking: 0.1 }) : null;
-    addEvent(start + tZoom, 'shake', 4, 0.2);
-    segments.push({
-      kind: 'closer', start, dur: D, col: globalCol, inT: transitions[nBound - 1], outT: { type: 'cut' },
-      draw(r, t, col) {
-        const ez = snap(prog(t, tZoom - 0.2, tZoom + 0.4));
-        r.cam.s = lerp(1, 0.86, ez) * (1 + 0.02 * prog(t, tZoom + 0.4, D));
-        r.cam.r = lerp(0, -0.035, ez);
-        for (const tl of tiles) {
-          const e = expoOut(prog(t, tl.delay, tl.delay + 0.5));
-          if (e <= 0) continue;
-          const z = tl.z * (1 + 0.25 * (1 - e));
-          const uv = coverUV(tl.w, tl.tw, tl.th, tl.f.x, tl.f.y, z);
-          r.draw({ x: tl.x, y: tl.y, w: tl.tw, h: tl.th, tex: tl.w.tex, uv, mask: { type: 'wipe', p: e, angle: tl.ang } });
-        }
-        r.resetCam();
-        // 暗幕と名前
-        const ed = expoOut(prog(t, tZoom, tZoom + 0.5));
-        if (ed > 0) {
-          r.draw({ x: W / 2, y: H / 2, w: W, h: H, color: withA(col.bg, 0.78 * ed) });
-          const ph = textH(NT, nScale) + minDim * 0.2;
-          r.draw({ x: W / 2, y: H / 2, w: W, h: ph, color: withA(col.bg, 0.9), mask: { type: 'wipe', p: snap(prog(t, tZoom, tZoom + 0.45)), angle: 0 } });
-          const y = H / 2 - textH(NT, nScale) / 2 - minDim * 0.02;
-          drawText(r, TY, W / 2, y - minDim * 0.06, { align: 'center', reveal: expoOut(prog(t, tZoom + 0.25, tZoom + 0.8)), color: col.accent });
-          drawText(r, NT, W / 2, y, { align: 'center', scale: nScale, reveal: expoOut(prog(t, tZoom + 0.15, tZoom + 0.75)), color: col.ink });
-          if (HT) drawText(r, HT, W / 2, y + textH(NT, nScale) + minDim * 0.04, { align: 'center', reveal: expoOut(prog(t, tZoom + 0.35, tZoom + 0.9)), color: withA(col.ink, 0.75) });
-        }
-      },
-    });
-    cursor += D;
+    const E = CLOSERS[closerKey]({ ...C, ev: (t, kind, amt, dur, color) => addEvent(start + t, kind, amt, dur, color) });
+    segments.push({ kind: 'closer', variant: closerKey, start, dur: E.dur, col: globalCol, inT: transitions[nBound - 1], outT: { type: 'cut' }, draw: E.draw });
+    cursor += E.dur;
   }
 
   const duration = cursor;
@@ -917,6 +800,8 @@ export function buildFilm(opts) {
     if (tr.type === 'glitch') addEvent(T - 0.2, 'aberr', 10, 0.5);
     if (tr.type === 'slices') addEvent(T, 'aberr', 3, 0.3);
     if (tr.type === 'bars') addEvent(T, 'shake', 3, 0.15);
+    if (tr.type === 'spin') addEvent(T, 'aberr', 6, 0.3);
+    if (tr.type === 'door') addEvent(T, 'shake', 3, 0.15);
   }
   // ループ時の頭（クロージング→オープニング）
   addEvent(0, 'flash', 0.8, 0.3);
@@ -996,8 +881,9 @@ export function buildFilm(opts) {
       if (t < T - 0.4 || t > T + 0.6) continue;
       drawBars(r, tr, t - T, W, H, segments[b].col, segments[b + 1].col);
     }
-    if (seg.inT && seg.inT.type === 'iris' && lt < ENTRY_DUR) bgCol = seg.inT.color;
-    if (seg.outT && seg.outT.type === 'iris' && lt >= outStart) bgCol = seg.outT.color;
+    const showsGap = (tr) => tr && (tr.type === 'iris' || tr.type === 'door' || tr.type === 'spin');
+    if (showsGap(seg.inT) && lt < ENTRY_DUR && i > 0) bgCol = seg.inT.color;
+    if (showsGap(seg.outT) && lt >= outStart) bgCol = seg.outT.color;
 
     if (theme.hud) HUD(r, t, seg, i, lt, col);
     r.present(evalFx(t), bgCol, t);
@@ -1006,7 +892,7 @@ export function buildFilm(opts) {
   function dispose() { /* テキストは TextFactory 側で一括破棄 */ }
 
   return {
-    duration, bpm, beat, theme: themeName, segments, events, render, dispose,
+    duration, bpm, beat, theme: themeName, opener: openerKey, closer: closerKey, segments, events, render, dispose,
     summary: segments.map((s) => ({ kind: s.kind, start: s.start, dur: s.dur, variant: s.variant, decor: s.decor, out: s.outT && s.outT.type })),
   };
 }

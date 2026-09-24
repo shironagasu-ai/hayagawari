@@ -60,13 +60,49 @@
   .work { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; position: relative; }
   .work.dragging { opacity: 0.4; }
   .work.dropbefore { box-shadow: -4px 0 0 var(--accent); }
-  .work .thumb { position: relative; aspect-ratio: 1; background: #000 center/contain no-repeat; cursor: crosshair; }
+  .work .thumb { position: relative; aspect-ratio: 1; background: #000 center/contain no-repeat; cursor: pointer; }
+  .work .thumb::after {
+    content: "注目点を編集"; position: absolute; left: 50%; bottom: 8px; transform: translateX(-50%);
+    font-size: 10px; padding: 3px 8px; border-radius: 999px; background: rgba(0,0,0,0.7); opacity: 0; transition: opacity 0.15s; white-space: nowrap;
+  }
+  .work .thumb:hover::after { opacity: 1; }
   .work .thumb .pt {
     position: absolute; width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 50%;
     border: 2px solid var(--accent); box-shadow: 0 0 0 2px rgba(0,0,0,0.5); pointer-events: none;
+    font: 700 9px/12px var(--mono); text-align: center; color: #fff; text-shadow: 0 0 3px #000;
   }
-  .work .thumb .pt.p0 { width: 22px; height: 22px; margin: -11px 0 0 -11px; background: rgba(255, 75, 62, 0.35); }
-  .work .thumb .pt.manual { border-color: var(--ok); background: rgba(125, 255, 178, 0.35); }
+  .work .thumb .pt.p0 { width: 22px; height: 22px; margin: -11px 0 0 -11px; line-height: 18px; background: rgba(255, 75, 62, 0.35); }
+  .work .thumb .pt.manual { border-color: var(--ok); }
+  .work .thumb .pt.manual.p0 { background: rgba(125, 255, 178, 0.35); }
+
+  /* ---------- 注目点エディタ ---------- */
+  #fe { position: fixed; inset: 0; z-index: 45; background: rgba(0,0,0,0.78); display: flex; align-items: center; justify-content: center; padding: 16px; }
+  #fe[hidden] { display: none; }
+  .fe-box { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; width: min(1000px, 100%); height: min(860px, 100%); display: flex; flex-direction: column; overflow: hidden; }
+  .fe-head { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  .fe-head b { font-size: 14px; }
+  .fe-head .sub { color: var(--sub); font-size: 12px; margin-right: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #fe-area { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 12px; background: #050506; }
+  #fe-stage { position: relative; cursor: crosshair; touch-action: none; }
+  #fe-canvas { display: block; }
+  #fe-pts { position: absolute; inset: 0; }
+  .fe-pt {
+    position: absolute; border-radius: 50%; border: 2px solid var(--accent); pointer-events: none;
+    box-shadow: 0 0 0 2px rgba(0,0,0,0.55), inset 0 0 0 1px rgba(0,0,0,0.4);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .fe-pt span { font: 700 12px var(--mono); background: var(--accent); color: #fff; border-radius: 999px; padding: 1px 6px; }
+  .fe-pt.manual { border-color: var(--ok); }
+  .fe-pt.manual span { background: #17a35a; }
+  .fe-pt.first { border-width: 3px; }
+  .fe-pt.sel { box-shadow: 0 0 0 2px rgba(0,0,0,0.55), 0 0 0 6px rgba(255,255,255,0.35); }
+  .fe-tools { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px 16px; border-top: 1px solid var(--line); font-size: 12px; }
+  .fe-tools .lbl { color: var(--sub); font-family: var(--mono); letter-spacing: 0.1em; }
+  .fe-tools input[type=range] { width: 160px; accent-color: var(--accent); }
+  .fe-tools .btn { padding: 7px 12px; font-size: 12px; }
+  .fe-tools .btn:disabled { opacity: 0.35; cursor: default; }
+  #fe-msg { color: var(--accent); margin-left: auto; }
+  .fe-help { padding: 0 16px 12px; font-size: 11px; color: var(--sub); line-height: 1.7; }
   .work .meta { display: flex; align-items: center; gap: 6px; padding: 8px; }
   .work .num { font-family: var(--mono); font-size: 11px; color: var(--sub); }
   .work input.title { flex: 1; min-width: 0; background: transparent; border: none; border-bottom: 1px solid transparent; font-size: 12px; padding: 2px 0; }
@@ -168,7 +204,7 @@
     </div>
 
     <div id="works"></div>
-    <div class="hint" id="works-hint" hidden>サムネイルをクリックすると、その位置を「一番見せたい箇所」に指定できます（赤丸＝自動検出、緑＝手動）。ドラッグで並べ替え。</div>
+    <div class="hint" id="works-hint" hidden>丸は注目点（番号＝優先順。1番が一番見せたい箇所）。サムネイルをクリックすると注目点を編集できます（赤＝自動検出、緑＝手動）。カードのドラッグで並べ替え。</div>
 
     <div class="grid-form">
       <div class="field">
@@ -199,6 +235,18 @@
         <label>STYLE / スタイル</label>
         <div class="seg" id="style">
           <button data-v="auto" class="on">おまかせ</button><button data-v="NOIR">NOIR</button><button data-v="SWISS">SWISS</button><button data-v="POP">POP</button><button data-v="EDITORIAL">EDITORIAL</button><button data-v="GLITCH">GLITCH</button>
+        </div>
+      </div>
+      <div class="field">
+        <label>OPENING / オープニング</label>
+        <div class="seg" id="opener">
+          <button data-v="auto" class="on">おまかせ</button><button data-v="montage">モンタージュ</button><button data-v="type">タイプ</button><button data-v="shutter">シャッター</button><button data-v="countdown">カウント</button><button data-v="knockout">抜き文字</button>
+        </div>
+      </div>
+      <div class="field">
+        <label>ENDING / エンディング</label>
+        <div class="seg" id="closer">
+          <button data-v="auto" class="on">おまかせ</button><button data-v="grid">グリッド</button><button data-v="filmstrip">フィルム</button><button data-v="stack">スタック</button><button data-v="knockout">抜き文字</button>
         </div>
       </div>
       <div class="field">
@@ -242,6 +290,23 @@
     <button class="btn" id="export">⤓ 書き出し</button>
     <button class="btn" id="fs" title="F">⛶</button>
     <button class="btn" id="edit" title="E">✎ 編集</button>
+  </div>
+</div>
+
+<div id="fe" hidden>
+  <div class="fe-box">
+    <div class="fe-head"><b>注目点の編集</b><span class="sub" id="fe-title"></span><button class="btn primary" id="fe-close">完了</button></div>
+    <div id="fe-area"><div id="fe-stage"><canvas id="fe-canvas"></canvas><div id="fe-pts"></div></div></div>
+    <div class="fe-tools">
+      <span class="lbl">選択中</span><b id="fe-sel">1</b>
+      <span class="lbl">寄りの範囲</span><input type="range" id="fe-size" min="0.06" max="0.6" step="0.01">
+      <button class="btn" id="fe-top">1番にする</button>
+      <button class="btn" id="fe-del">削除</button>
+      <button class="btn" id="fe-reset">自動検出に戻す</button>
+      <span class="lbl" id="fe-count"></span>
+      <span id="fe-msg"></span>
+    </div>
+    <div class="fe-help">番号（中心）か円の縁をドラッグで移動 ・ それ以外をクリックで追加（最大4）・ 円の大きさ＝寄りの範囲（小さいほど強く寄る。ホイールでも調整）・ 1番が一番見せたい箇所（寄り→引きの着地点）・ キー: 1〜4 選択 / Delete 削除 / Esc 閉じる</div>
   </div>
 </div>
 
