@@ -123,14 +123,25 @@
   .seedrow button { flex: 0 0 auto; }
 
 
-  /* ---------- かんたん / こだわり ---------- */
-  .modebar { margin-top: 22px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-  .modebar .hint { margin-top: 0; }
-  body.simple .adv { display: none !important; }
-  body:not(.simple) .simple-only { display: none !important; }
-  body.simple .work .meta, body.simple .work .thumb .pt, body.simple .work .thumb::after { display: none; }
-  body.simple .work .thumb { cursor: default; }
-  body.simple .grid-form { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+  /* ---------- 詳細設定（アコーディオン） ---------- */
+  #adv { margin-top: 26px; border: 1px solid var(--line); border-radius: 12px; background: rgba(20,20,23,0.6); }
+  #adv > summary {
+    list-style: none; cursor: pointer; padding: 14px 18px; display: flex; align-items: center; gap: 12px;
+    font-size: 14px; font-weight: 700; user-select: none;
+  }
+  #adv > summary::-webkit-details-marker { display: none; }
+  #adv > summary::before { content: "▸"; color: var(--sub); transition: transform 0.15s; display: inline-block; }
+  #adv[open] > summary::before { transform: rotate(90deg); }
+  #adv-sum { font-weight: 400; font-size: 12px; color: var(--sub); }
+  #adv-sum.changed { color: var(--accent); }
+  .adv-body { padding: 0 18px 18px; }
+  .adv-body > .hint { margin-top: 0; }
+  .adv-body .grid-form { margin-top: 16px; }
+  #adv-reset { margin-left: auto; padding: 5px 12px; font-size: 11px; font-weight: 400; }
+  #adv-reset[hidden] { display: none; }
+  body:not(.adv-open) .adv-only { display: none !important; }
+  body:not(.adv-open) .work .meta, body:not(.adv-open) .work .thumb .pt, body:not(.adv-open) .work .thumb::after { display: none; }
+  body:not(.adv-open) .work .thumb { cursor: default; }
 
   .cta { margin-top: 34px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
   .cta .btn.primary { padding: 14px 30px; font-size: 15px; }
@@ -203,11 +214,6 @@
       <p>イラストを並べるだけで、注目点を解析してキビキビ動くポートフォリオ映像を生成します。シードを変えるたびに別の演出に。画像はブラウザ内で処理され、どこにも送信されません。</p>
     </header>
 
-    <div class="modebar">
-      <div class="seg" id="mode"><button data-v="simple">かんたん</button><button data-v="pro">こだわり</button></div>
-      <span class="hint" id="mode-hint"></span>
-    </div>
-
     <div id="drop">
       <div class="big">イラストをドロップ</div>
       <div class="small">PNG / JPG / WebP ・ 複数可 ・ 2〜12枚くらいがおすすめ</div>
@@ -219,18 +225,18 @@
     </div>
 
     <div id="works"></div>
-    <div class="hint adv" id="works-hint" hidden>丸は注目点（番号＝優先順。1番が一番見せたい箇所）。サムネイルをクリックすると注目点を編集できます（赤＝自動検出、緑＝手動）。カードのドラッグで並べ替え。</div>
+    <div class="hint adv-only" id="works-hint" hidden>丸は注目点（番号＝優先順。1番が一番見せたい箇所）。サムネイルをクリックすると注目点を編集できます（赤＝自動検出、緑＝手動）。カードのドラッグで並べ替え。</div>
 
     <div class="grid-form">
       <div class="field">
         <label>NAME / 作家名</label>
         <input type="text" id="artist" placeholder="例: SHIRONAGASU" maxlength="40">
       </div>
-      <div class="field adv">
+      <div class="field">
         <label>SUBTITLE / サブタイトル（任意）</label>
         <input type="text" id="subline" placeholder="例: ILLUSTRATION WORKS 2026" maxlength="48">
       </div>
-      <div class="field adv">
+      <div class="field">
         <label>LINK / SNS・URL（任意・エンディングに表示）</label>
         <input type="text" id="handle" placeholder="例: @shironagasu" maxlength="48">
       </div>
@@ -240,52 +246,61 @@
           <button data-v="16:9" class="on">16:9</button><button data-v="9:16">9:16</button><button data-v="1:1">1:1</button>
         </div>
       </div>
-      <div class="field adv">
+    </div>
+
+    <details id="adv">
+      <summary><span class="adv-title">詳細設定</span><span id="adv-sum"></span><button type="button" class="btn" id="adv-reset">おまかせに戻す</button></summary>
+      <div class="adv-body">
+        <p class="hint">閉じていても設定は反映されます。開いている間は、作品ごとのタイトルと注目点も編集できます。</p>
+        <div class="grid-form">
+      <div class="field">
         <label>TEMPO / テンポ</label>
         <div class="seg" id="pace">
           <button data-v="relaxed">ゆったり</button><button data-v="normal" class="on">標準</button><button data-v="tight">キビキビ</button>
         </div>
       </div>
-      <div class="field adv">
+      <div class="field">
         <label>STYLE / スタイル</label>
         <div class="seg" id="style">
           <button data-v="auto" class="on">おまかせ</button><button data-v="NOIR">NOIR</button><button data-v="SWISS">SWISS</button><button data-v="POP">POP</button><button data-v="EDITORIAL">EDITORIAL</button><button data-v="GLITCH">GLITCH</button>
         </div>
       </div>
-      <div class="field adv">
+      <div class="field">
         <label>OPENING / オープニング</label>
         <div class="seg" id="opener">
           <button data-v="auto" class="on">おまかせ</button><button data-v="montage">モンタージュ</button><button data-v="type">タイプ</button><button data-v="shutter">シャッター</button><button data-v="countdown">カウント</button><button data-v="knockout">抜き文字</button>
         </div>
       </div>
-      <div class="field adv">
+      <div class="field">
         <label>ENDING / エンディング</label>
         <div class="seg" id="closer">
           <button data-v="auto" class="on">おまかせ</button><button data-v="grid">グリッド</button><button data-v="filmstrip">フィルム</button><button data-v="stack">スタック</button><button data-v="knockout">抜き文字</button>
         </div>
       </div>
-      <div class="field adv">
+      <div class="field">
         <label>ORDER / 並び順</label>
         <div class="seg" id="order">
           <button data-v="keep" class="on">この順番</button><button data-v="shuffle">シードで並べ替え</button>
         </div>
       </div>
-      <div class="field adv">
+      <div class="field">
         <label>SEED / シード（同じシード＋同じ画像＝同じ映像）</label>
         <div class="seedrow">
           <input type="text" id="seed" maxlength="24" spellcheck="false">
           <button class="btn" id="dice" title="新しいシード">🎲</button>
         </div>
       </div>
-    </div>
+        </div>
+      </div>
+    </details>
 
     <div class="cta">
-      <button class="btn primary" id="go" disabled>▶ 映像を生成して再生</button>
+      <button class="btn primary" id="go" disabled>▶ 再生</button>
       <span class="hint" id="go-hint">まずイラストを追加してください</span>
-      <span class="hint simple-only">再生中の「🎲 別バージョン」（R キー）で、押すたびに違う演出になります</span>
+      <span class="hint">再生中の「🎲 別バージョン」（R キー）で、押すたびに違う演出になります</span>
     </div>
 
-    <p class="note adv">
+    <p class="note">
       操作: Space 再生/停止 ・ R 別バージョン（シード変更）・ ← → 前/次の作品 ・ F 全画面 ・ E 編集に戻る ・ P パフォーマンス表示<br>
       書き出しはブラウザの録画機能（MediaRecorder）で実時間録画します。録画中はタブを前面に出したままにしてください。
     </p>

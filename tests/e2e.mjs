@@ -87,7 +87,7 @@ async function sheet(page, file, rows) {
 
 // ---- 1. 16:9 でサンプル読み込み → 生成 → 各時刻の描画
 {
-  const { page, errors } = await openPage({ width: 1280, height: 720 }, '#seed=TEST-0001&style=auto&mode=pro');
+  const { page, errors } = await openPage({ width: 1280, height: 720 }, '#seed=TEST-0001&style=auto');
   await page.evaluate(() => window.__hg.loadSamples());
   await page.waitForFunction(() => window.__hg.state.works.length === 6, null, { timeout: 30000 });
   const focal = await page.evaluate(() => window.__hg.state.works.map((w) => ({ name: w.name, f: w.focal.map((p) => [+p.x.toFixed(2), +p.y.toFixed(2), +p.size.toFixed(2)]) })));
@@ -195,7 +195,8 @@ async function sheet(page, file, rows) {
 
   // 注目点エディタ: 開く → ドラッグ移動 → 追加 → 1番にする → 削除 → 自動に戻す
   await page.evaluate(() => window.__hg.toEditor());
-  await page.waitForFunction(() => getComputedStyle(document.querySelector('#editor')).opacity === '1');
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('#editor')).opacity === '1', null, { timeout: 60000 });
+  await page.click('#adv > summary');
   await page.click('.work:nth-child(2) .thumb');
   await page.waitForSelector('#fe:not([hidden])');
   const box = await page.locator('#fe-stage').boundingBox();
@@ -235,7 +236,7 @@ async function sheet(page, file, rows) {
 
 // ---- 2. 9:16 縦型
 {
-  const { page, errors } = await openPage({ width: 540, height: 960 }, '#seed=VERT-0002&aspect=9:16&mode=pro');
+  const { page, errors } = await openPage({ width: 540, height: 960 }, '#seed=VERT-0002&aspect=9:16');
   await page.evaluate(() => window.__hg.loadSamples());
   await page.waitForFunction(() => window.__hg.state.works.length === 6, null, { timeout: 30000 });
   await page.fill('#artist', 'SHIRONAGASU');
@@ -252,37 +253,42 @@ async function sheet(page, file, rows) {
   await page.close();
 }
 
-// ---- 3. かんたんモード（初回の既定）: 画像・名前・比率だけで再生でき、詳細設定は無視される
+// ---- 3. 初回表示（詳細設定は閉じている）: 基本項目だけで再生でき、開くと詳細が出る
 {
   const { page, errors } = await openPage({ width: 1280, height: 800 }, '#seed=EASY-0003&style=GLITCH&opener=type');
-  check('simple mode is default', await page.evaluate(() => document.body.classList.contains('simple') && window.__hg.state.mode === 'simple'));
-  const vis = await page.evaluate(() => ['#artist', '#aspect', '#style', '#seed', '#opener', '#subline'].map((q) => document.querySelector(q).offsetParent !== null));
-  check('only name/aspect visible', JSON.stringify(vis) === JSON.stringify([true, true, false, false, false, false]), JSON.stringify(vis));
+  const visible = () => page.evaluate(() => ['#artist', '#subline', '#handle', '#aspect', '#style', '#seed', '#opener', '#pace'].map((q) => document.querySelector(q).checkVisibility()));
+  check('accordion closed by default', await page.evaluate(() => !document.querySelector('#adv').open && !window.__hg.state.advOpen));
+  check('basic fields visible, advanced hidden', JSON.stringify(await visible()) === JSON.stringify([true, true, true, true, false, false, false, false]), JSON.stringify(await visible()));
+  const sum = await page.textContent('#adv-sum');
+  check('summary shows settings from URL while closed', sum.includes('GLITCH') && sum.includes('タイプ'), sum);
   await page.evaluate(() => window.__hg.loadSamples());
   await page.waitForFunction(() => window.__hg.state.works.length === 6, null, { timeout: 30000 });
-  check('play button label', (await page.textContent('#go')).trim() === '▶ 再生');
+  check('titles/focal hidden while closed', await page.evaluate(() => !document.querySelector('.work .meta').checkVisibility()));
   await page.click('.work:nth-child(1) .thumb');
-  check('focal editor stays closed in simple mode', await page.evaluate(() => document.querySelector('#fe').hidden));
+  check('focal editor stays closed while accordion closed', await page.evaluate(() => document.querySelector('#fe').hidden));
   await page.fill('#artist', 'EASY');
+  await page.fill('#subline', 'ILLUSTRATION WORKS');
+  await page.fill('#handle', '@easy');
   await page.click('#go');
   await page.waitForTimeout(500);
-  const f1 = await page.evaluate(() => { const f = window.__hg.state.film; return { theme: f.theme, opener: f.opener, t: window.__hg.state.t, playing: window.__hg.state.playing }; });
-  check('simple ignores hidden style/opener from URL', !(f1.theme === 'GLITCH' && f1.opener === 'type'), JSON.stringify(f1));
-  check('simple mode plays', f1.playing && f1.t > 0);
+  const f1 = await page.evaluate(() => { const f = window.__hg.state.film; return { theme: f.theme, opener: f.opener, playing: window.__hg.state.playing, t: window.__hg.state.t }; });
+  check('closed accordion settings still apply', f1.theme === 'GLITCH' && f1.opener === 'type', JSON.stringify(f1));
+  check('plays', f1.playing && f1.t > 0);
   await page.click('#reroll');
-  const s2 = await page.evaluate(() => window.__hg.state.seed);
-  check('reroll gives new seed', s2 !== 'EASY-0003');
-  await page.screenshot({ path: join(outDir, 'simple-play.png') });
+  check('reroll gives new seed', (await page.evaluate(() => window.__hg.state.seed)) !== 'EASY-0003');
   await page.evaluate(() => window.__hg.toEditor());
-  await page.waitForFunction(() => getComputedStyle(document.querySelector('#editor')).opacity === '1');
-  await page.screenshot({ path: join(outDir, 'simple-editor.png'), fullPage: false });
-  // こだわりに切り替えると隠れていた設定が戻る
-  await page.click('#mode button[data-v="pro"]');
-  const back = await page.evaluate(() => ({ style: window.__hg.state.style, vis: document.querySelector('#style').offsetParent !== null }));
-  check('pro mode restores hidden settings', back.style === 'GLITCH' && back.vis, JSON.stringify(back));
-  const saved = await page.evaluate(() => localStorage.getItem('hg-mode'));
-  check('mode remembered', saved === 'pro');
-  check('no page errors (simple)', errors.length === 0, errors.join('\n'));
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('#editor')).opacity === '1', null, { timeout: 60000 });
+  await page.screenshot({ path: join(outDir, 'basic-closed.png'), fullPage: true });
+  await page.click('#adv-reset');
+  check('reset does not toggle accordion', await page.evaluate(() => !document.querySelector('#adv').open));
+  check('reset hidden after reset', await page.evaluate(() => document.querySelector('#adv-reset').hidden));
+  check('reset returns to おまかせ', (await page.textContent('#adv-sum')) === 'すべておまかせ' && (await page.evaluate(() => window.__hg.state.style)) === 'auto');
+  await page.click('#adv > summary');
+  check('open shows advanced fields', JSON.stringify(await visible()) === JSON.stringify([true, true, true, true, true, true, true, true]));
+  check('open shows titles', await page.evaluate(() => document.querySelector('.work .meta').checkVisibility()));
+  await page.screenshot({ path: join(outDir, 'basic-open.png'), fullPage: true });
+  check('open state remembered', (await page.evaluate(() => localStorage.getItem('hg-adv'))) === '1');
+  check('no page errors (basic)', errors.length === 0, errors.join('\n'));
   await page.close();
 }
 
