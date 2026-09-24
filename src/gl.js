@@ -38,6 +38,9 @@ uniform vec4 u_tint;      // rgb, 量
 uniform vec4 u_pat;       // 周期px, 太さ比, 角度, オフセットpx
 uniform vec2 u_size;      // 描画サイズ px
 uniform float u_alpha;
+uniform sampler2D u_mtex; // 形マスク用テクスチャ（文字の形で切り抜くなど）
+uniform int u_useM;
+uniform vec4 u_muv;
 out vec4 o;
 
 float aa(float d, float soft){ return clamp(0.5 - d / max(soft, 0.001), 0.0, 1.0); }
@@ -125,6 +128,11 @@ void main(){
     }
     col = vec4(u_color.rgb * u_color.a, u_color.a) * a;
   }
+  if (u_useM == 1) {
+    vec2 mu = mix(u_muv.xy, u_muv.zw, v_uv);
+    float inside = step(0.0, mu.x) * step(0.0, mu.y) * step(mu.x, 1.0) * step(mu.y, 1.0);
+    col *= texture(u_mtex, mu).a * inside;
+  }
   o = col * maskValue() * u_alpha;
 }`;
 
@@ -146,7 +154,7 @@ uniform float u_rot;
 uniform vec2 u_blurDir;   // 方向ブラー uv
 uniform float u_radial;   // 放射ブラー
 uniform vec4 u_mask;      // 種別(0なし 1円), 進捗, 中心x, 中心y
-uniform vec4 u_slice;     // 軸(0=横帯が横へ /1=縦帯が縦へ), 本数, 進捗, 方向(+1退場 -1入場)
+uniform vec4 u_slice;     // 軸(0=横帯が横へ /1=縦帯が縦へ /2=観音開き), 本数, 進捗, 方向(+1退場 -1入場)
 uniform float u_glitch;
 uniform float u_time;
 uniform float u_alpha;
@@ -170,7 +178,12 @@ void main(){
   d = vec2(d.x*c - d.y*s, d.x*s + d.y*c) / u_scale;
   uv = u_center + d / asp;
 
-  if (u_slice.y > 0.5) {
+  bool doorL = false, doorR = false;
+  if (u_slice.x > 1.5) {
+    // 観音開き: 左右の半分がそれぞれ外へ（u_slice.z = 開き量 0..1）
+    float e = u_slice.z * 0.55;
+    if (v_uv.x < 0.5) { uv.x += e; doorL = true; } else { uv.x -= e; doorR = true; }
+  } else if (u_slice.y > 0.5) {
     float n = u_slice.y;
     float along = u_slice.x < 0.5 ? v_uv.y : v_uv.x;
     float idx = floor(along * n);
@@ -200,6 +213,7 @@ void main(){
   } else {
     col = samp(uv);
   }
+  if ((doorL && uv.x > 0.5) || (doorR && uv.x < 0.5)) col = vec4(0.0);
   if (u_mask.x > 0.5) {
     vec2 p = (v_uv - u_mask.zw) * asp;
     vec2 far = max(abs(vec2(0.0) - u_mask.zw), abs(vec2(1.0) - u_mask.zw)) * asp;
@@ -379,7 +393,8 @@ export class Renderer {
     c.x = 0; c.y = 0; c.s = 1; c.r = 0; c.cx = this.vw / 2; c.cy = this.vh / 2;
   }
 
-  // 汎用の矩形描画。o: {x,y,w,h, rot, skew, color, tex, uv, lod, blur, mask, tint, alpha, mode, pat, cam}
+  // 汎用の矩形描画。o: {x,y,w,h, rot, skew, color, tex, uv, lod, blur, mask, tint, alpha, mode, pat, cam, mtex, muv}
+  // mtex を渡すと、そのアルファで形を切り抜く（muv はマスク側の uv 矩形）
   draw(o) {
     const gl = this.gl;
     const { p, u } = this.quad;
@@ -426,6 +441,17 @@ export class Renderer {
       gl.uniform4f(u.u_mask, 0, 1, 0, 1);
     }
     gl.uniform1f(u.u_alpha, o.alpha ?? 1);
+    if (o.mtex) {
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, o.mtex);
+      gl.uniform1i(u.u_mtex, 1);
+      const mu = o.muv || FULL_UV;
+      gl.uniform4f(u.u_muv, mu[0], mu[1], mu[2], mu[3]);
+      gl.uniform1i(u.u_useM, 1);
+      gl.activeTexture(gl.TEXTURE0);
+    } else {
+      gl.uniform1i(u.u_useM, 0);
+    }
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     this.drawCalls++;
   }

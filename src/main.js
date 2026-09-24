@@ -5,6 +5,7 @@ import { analyzeImage } from './analyze.js';
 import { buildFilm } from './director.js';
 import { makeSamples } from './samples.js';
 import { randomSeed, createRng } from './rng.js';
+import { initFocalEditor, openFocalEditor } from './focal-editor.js';
 
 const $ = (s) => document.querySelector(s);
 const canvas = $('#gl');
@@ -28,6 +29,9 @@ const state = {
   pace: 'normal',
   style: 'auto',
   order: 'keep',
+  opener: 'auto',
+  closer: 'auto',
+  mode: 'simple', // かんたん: 画像・名前・比率だけ。他は「おまかせ」で生成
   film: null,
   t: 0,
   playing: false,
@@ -45,9 +49,11 @@ function readHash() {
   if (['tight', 'normal', 'relaxed'].includes(h.get('pace'))) state.pace = h.get('pace');
   if (h.get('style')) state.style = h.get('style');
   if (['keep', 'shuffle'].includes(h.get('order'))) state.order = h.get('order');
+  if (h.get('opener')) state.opener = h.get('opener');
+  if (h.get('closer')) state.closer = h.get('closer');
 }
 function writeHash() {
-  const h = new URLSearchParams({ seed: state.seed, aspect: state.aspect, pace: state.pace, style: state.style, order: state.order });
+  const h = new URLSearchParams({ seed: state.seed, aspect: state.aspect, pace: state.pace, style: state.style, order: state.order, opener: state.opener, closer: state.closer });
   history.replaceState(null, '', '#' + h.toString());
 }
 
@@ -74,7 +80,7 @@ function renderWorks() {
     el.className = 'work';
     el.draggable = true;
     el.dataset.id = w.id;
-    const pts = w.focal.map((f, k) => `<span class="pt ${k === 0 ? 'p0' : ''} ${f.manual ? 'manual' : ''}" style="left:${f.x * 100}%;top:${f.y * 100}%"></span>`).join('');
+    const pts = w.focal.map((f, k) => `<span class="pt ${k === 0 ? 'p0' : ''} ${f.manual ? 'manual' : ''}" style="left:${f.x * 100}%;top:${f.y * 100}%">${k + 1}</span>`).join('');
     el.innerHTML = `
       <div class="thumb" style="background-image:url(${w.thumb})"><div class="ptbox" style="position:absolute;inset:0"></div></div>
       <span class="grip">⠿ ${String(i + 1).padStart(2, '0')}</span>
@@ -88,14 +94,7 @@ function renderWorks() {
     if (a >= 1) { ptbox.style.top = `${(1 - 1 / a) * 50}%`; ptbox.style.bottom = `${(1 - 1 / a) * 50}%`; }
     else { ptbox.style.left = `${(1 - a) * 50}%`; ptbox.style.right = `${(1 - a) * 50}%`; }
     ptbox.innerHTML = pts;
-    thumb.addEventListener('click', (e) => {
-      const r = ptbox.getBoundingClientRect();
-      const x = (e.clientX - r.left) / r.width, y = (e.clientY - r.top) / r.height;
-      if (x < 0 || y < 0 || x > 1 || y > 1) return;
-      setManualFocal(w, x, y);
-      renderWorks();
-    });
-    thumb.addEventListener('contextmenu', (e) => { e.preventDefault(); w.focal = w.autoFocal.map((f) => ({ ...f })); state.film = null; renderWorks(); });
+    thumb.addEventListener('click', () => { if (state.mode === 'pro') openFocalEditor(w, () => { state.film = null; renderWorks(); }); });
     el.querySelector('.x').addEventListener('click', () => removeWork(w.id));
     el.querySelector('input.title').addEventListener('input', (e) => { w.title = e.target.value || 'UNTITLED'; state.film = null; });
     el.addEventListener('dragstart', (e) => { el.classList.add('dragging'); e.dataTransfer.setData('text/x-work', String(w.id)); e.dataTransfer.effectAllowed = 'move'; });
@@ -119,19 +118,13 @@ function renderWorks() {
   const n = state.works.length;
   $('#works-hint').hidden = n === 0;
   $('#go').disabled = n === 0;
+  $('#go').textContent = state.mode === 'simple' ? '▶ 再生' : '▶ 映像を生成して再生';
   $('#go-hint').textContent = n === 0 ? 'まずイラストを追加してください' : `${n} 枚 ・ 約 ${estimateDuration()} 秒`;
 }
 
 function estimateDuration() {
-  const beats = { tight: 6, normal: 8, relaxed: 10 }[state.pace];
+  const beats = { tight: 6, normal: 8, relaxed: 10 }[effective().pace];
   return Math.round((6 + state.works.length * beats + 8) * (60 / 124));
-}
-
-function setManualFocal(w, x, y) {
-  const near = w.autoFocal.reduce((a, f) => (Math.hypot(f.x - x, f.y - y) < Math.hypot(a.x - x, a.y - y) ? f : a), w.autoFocal[0]);
-  const rest = w.autoFocal.filter((f) => Math.hypot(f.x - x, f.y - y) > 0.18);
-  w.focal = [{ x, y, size: near ? near.size : 0.3, strength: 1, manual: true }, ...rest].slice(0, 4);
-  state.film = null;
 }
 
 function removeWork(id) {
@@ -171,17 +164,51 @@ function addFiles(files) {
 
 // ---------------------------------------------------------------- 映像の生成
 
+// かんたんモードでは詳細設定を無視して既定値（おまかせ）で作る。詳細設定の値自体は保持する
+function effective() {
+  const pro = state.mode === 'pro';
+  return {
+    pace: pro ? state.pace : 'normal',
+    style: pro ? state.style : 'auto',
+    opener: pro ? state.opener : 'auto',
+    closer: pro ? state.closer : 'auto',
+    order: pro ? state.order : 'keep',
+    subline: pro ? $('#subline').value.trim() : '',
+    handle: pro ? $('#handle').value.trim() : '',
+  };
+}
+
+const MODE_HINT = {
+  simple: '画像・名前・比率だけでOK。演出はすべておまかせ',
+  pro: 'スタイル・テンポ・オープニング/エンディング・シード・注目点まで細かく指定',
+};
+
+function setMode(m) {
+  state.mode = m === 'pro' ? 'pro' : 'simple';
+  body.classList.toggle('simple', state.mode === 'simple');
+  document.querySelectorAll('#mode button').forEach((b) => b.classList.toggle('on', b.dataset.v === state.mode));
+  $('#mode-hint').textContent = MODE_HINT[state.mode];
+  try { localStorage.setItem('hg-mode', state.mode); } catch { /* 保存できなくても動作に影響なし */ }
+  state.film = null;
+  renderWorks();
+}
+
 function build() {
   if (!state.works.length) return null;
+  const E = effective();
   tf.dispose();
   for (const w of state.works) if (!w.tex) w.tex = renderer.createTexture(w.source);
   const [W, H] = ASPECTS[state.aspect];
   let works = state.works;
-  if (state.order === 'shuffle') works = createRng('order|' + state.seed).shuffle(works);
+  if (E.order === 'shuffle') works = createRng('order|' + state.seed).shuffle(works);
   const t0 = performance.now();
   state.film = buildFilm({
-    works, seed: state.seed, W, H, tf, pace: state.pace,
-    theme: state.style === 'auto' ? null : state.style,
+    works, seed: state.seed, W, H, tf, pace: E.pace,
+    theme: E.style === 'auto' ? null : E.style,
+    opener: E.opener === 'auto' ? null : E.opener,
+    closer: E.closer === 'auto' ? null : E.closer,
+    artist: $('#artist').value.trim(), subline: E.subline, handle: E.handle,
+    variant: state.variant || null,
     artist: $('#artist').value.trim(), subline: $('#subline').value.trim(), handle: $('#handle').value.trim(),
   });
   state.buildMs = performance.now() - t0;
@@ -400,6 +427,10 @@ bindSeg('#aspect', 'aspect');
 bindSeg('#pace', 'pace');
 bindSeg('#style', 'style');
 bindSeg('#order', 'order');
+bindSeg('#opener', 'opener');
+bindSeg('#closer', 'closer');
+initFocalEditor();
+$('#mode').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) setMode(b.dataset.v); });
 $('#pace').addEventListener('click', renderWorks);
 for (const id of ['#artist', '#subline', '#handle']) $(id).addEventListener('input', () => { state.film = null; });
 $('#seed').addEventListener('input', (e) => { state.seed = e.target.value.trim().toUpperCase() || randomSeed(); state.film = null; });
@@ -442,7 +473,7 @@ $('#stage').addEventListener('click', () => { if (body.classList.contains('playi
 window.addEventListener('pointermove', wake);
 window.addEventListener('resize', () => { if (!recorder) resize(); poke(); });
 window.addEventListener('keydown', (e) => {
-  if (e.target.tagName === 'INPUT') return;
+  if (e.target.tagName === 'INPUT' || !$('#fe').hidden) return;
   if (!body.classList.contains('playing') || recorder) return;
   if (e.code === 'Space') { e.preventDefault(); state.playing ? pause() : play(false); }
   else if (e.key === 'r' || e.key === 'R') reroll();
@@ -456,12 +487,16 @@ window.addEventListener('keydown', (e) => {
 document.addEventListener('visibilitychange', () => { if (document.hidden && recorder) toast('録画中はタブを前面にしてください'); });
 
 resize();
-renderWorks();
+{
+  let m = 'simple';
+  try { m = localStorage.getItem('hg-mode') || 'simple'; } catch { /* プライベートモード等 */ }
+  setMode(new URLSearchParams(location.hash.slice(1)).get('mode') || m);
+}
 
 // テスト・デバッグ用フック
 window.__hg = {
   state, renderer,
-  build, play, pause, reroll,
+  build, play, pause, reroll, toEditor, setMode,
   loadSamples: () => addSources(makeSamples('samples').map((s) => ({ src: s.canvas, name: s.name }))),
   renderAt: (t) => { state.film.render(renderer, t); state.t = t; },
   setSeed: (s) => { state.seed = s; $('#seed').value = s; state.film = null; },
