@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>HAYAGAWARI — Portfolio Motion Generator</title>
+<meta name="description" content="イラストをアップロードすると、注目点を解析してキビキビ動くポートフォリオ映像を自動生成。シードごとに違う演出。">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23111'/%3E%3Crect x='6' y='6' width='12' height='20' fill='%23ff4b3e'/%3E%3Crect x='20' y='6' width='6' height='20' fill='%23f3f0e8'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #0b0b0d; --panel: #141417; --line: #2a2a30; --ink: #f1efe9; --sub: #8d8b86;
+    --accent: #ff4b3e; --ok: #7dffb2;
+    --mono: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: "Helvetica Neue", Inter, Arial, "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: var(--bg); color: var(--ink); font-family: var(--sans); }
+  body { overflow: hidden; }
+  button, input, select { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+
+  /* ---------- 再生面 ---------- */
+  #stage { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: #000; }
+  #gl { display: block; background: #000; }
+
+  /* ---------- 編集パネル ---------- */
+  #editor {
+    position: fixed; inset: 0; z-index: 20; overflow-y: auto;
+    background: rgba(8, 8, 10, 0.88); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+    transition: opacity 0.25s;
+  }
+  body.playing #editor { opacity: 0; pointer-events: none; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 40px 20px 120px; }
+  header.brand { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; border-bottom: 1px solid var(--line); padding-bottom: 18px; }
+  .brand h1 { font-size: clamp(34px, 7vw, 64px); font-weight: 900; letter-spacing: -0.02em; line-height: 0.95; }
+  .brand h1 span { color: var(--accent); }
+  .brand p { color: var(--sub); font-size: 13px; line-height: 1.7; max-width: 420px; }
+  .kicker { font-family: var(--mono); font-size: 11px; letter-spacing: 0.25em; color: var(--sub); margin-bottom: 8px; }
+
+  #drop {
+    margin-top: 28px; border: 1.5px dashed #3a3a42; border-radius: 14px; padding: 28px 20px;
+    display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  #drop.over { border-color: var(--accent); background: rgba(255, 75, 62, 0.06); }
+  #drop .big { font-size: 18px; font-weight: 700; }
+  #drop .small { font-size: 12px; color: var(--sub); }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+  .btn {
+    border: 1px solid var(--line); background: var(--panel); border-radius: 999px;
+    padding: 10px 18px; font-size: 13px; letter-spacing: 0.04em; transition: border-color 0.12s, transform 0.08s;
+  }
+  .btn:hover { border-color: #55555f; }
+  .btn:active { transform: scale(0.97); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 700; }
+  .btn.primary:disabled { opacity: 0.35; cursor: default; }
+  input[type=file] { display: none; }
+
+  #works { margin-top: 24px; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px; }
+  .work { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; position: relative; }
+  .work.dragging { opacity: 0.4; }
+  .work.dropbefore { box-shadow: -4px 0 0 var(--accent); }
+  .work .thumb { position: relative; aspect-ratio: 1; background: #000 center/contain no-repeat; cursor: crosshair; }
+  .work .thumb .pt {
+    position: absolute; width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 50%;
+    border: 2px solid var(--accent); box-shadow: 0 0 0 2px rgba(0,0,0,0.5); pointer-events: none;
+  }
+  .work .thumb .pt.p0 { width: 22px; height: 22px; margin: -11px 0 0 -11px; background: rgba(255, 75, 62, 0.35); }
+  .work .thumb .pt.manual { border-color: var(--ok); background: rgba(125, 255, 178, 0.35); }
+  .work .meta { display: flex; align-items: center; gap: 6px; padding: 8px; }
+  .work .num { font-family: var(--mono); font-size: 11px; color: var(--sub); }
+  .work input.title { flex: 1; min-width: 0; background: transparent; border: none; border-bottom: 1px solid transparent; font-size: 12px; padding: 2px 0; }
+  .work input.title:focus { outline: none; border-bottom-color: var(--accent); }
+  .work .x { position: absolute; top: 6px; right: 6px; width: 24px; height: 24px; border-radius: 50%; border: none; background: rgba(0,0,0,0.65); font-size: 13px; line-height: 24px; }
+  .work .grip { position: absolute; top: 6px; left: 6px; font-size: 11px; padding: 2px 6px; border-radius: 6px; background: rgba(0,0,0,0.65); cursor: grab; font-family: var(--mono); }
+  .hint { margin-top: 10px; font-size: 12px; color: var(--sub); }
+
+  .grid-form { margin-top: 28px; display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 18px 22px; }
+  .field label { display: block; font-family: var(--mono); font-size: 11px; letter-spacing: 0.18em; color: var(--sub); margin-bottom: 8px; }
+  .field input[type=text] { width: 100%; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; font-size: 14px; }
+  .field input[type=text]:focus { outline: none; border-color: var(--accent); }
+  .seg { display: inline-flex; flex-wrap: wrap; gap: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 4px; }
+  .seg button { border: none; background: transparent; border-radius: 7px; padding: 7px 11px; font-size: 12px; color: var(--sub); }
+  .seg button.on { background: var(--ink); color: #111; font-weight: 700; }
+  .seedrow { display: flex; gap: 8px; }
+  .seedrow input { font-family: var(--mono) !important; letter-spacing: 0.12em; text-transform: uppercase; }
+  .seedrow button { flex: 0 0 auto; }
+
+  .cta { margin-top: 34px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .cta .btn.primary { padding: 14px 30px; font-size: 15px; }
+  .note { font-size: 11px; color: var(--sub); line-height: 1.7; margin-top: 26px; }
+
+  /* ---------- プレイヤー操作 ---------- */
+  #bar {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
+    padding: 28px 16px calc(12px + env(safe-area-inset-bottom));
+    background: linear-gradient(transparent, rgba(0,0,0,0.75));
+    display: flex; flex-direction: column; gap: 10px;
+    transition: opacity 0.3s; opacity: 0; pointer-events: none;
+  }
+  body.playing #bar { opacity: 1; pointer-events: auto; }
+  body.playing.idle #bar { opacity: 0; }
+  body.playing.idle { cursor: none; }
+  #seek { position: relative; height: 18px; cursor: pointer; touch-action: none; }
+  #seek .track { position: absolute; left: 0; right: 0; top: 8px; height: 3px; background: rgba(255,255,255,0.2); border-radius: 2px; }
+  #seek .fill { position: absolute; left: 0; top: 8px; height: 3px; width: 100%; background: var(--accent); transform-origin: 0 0; border-radius: 2px; }
+  #seek .mark { position: absolute; top: 5px; width: 1px; height: 9px; background: rgba(255,255,255,0.45); }
+  .controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .controls .btn { padding: 8px 14px; font-size: 12px; background: rgba(20,20,23,0.8); }
+  .controls .info { font-family: var(--mono); font-size: 11px; color: #bdbab3; letter-spacing: 0.08em; margin-right: auto; display: flex; gap: 14px; flex-wrap: wrap; }
+  .controls .info b { color: #fff; }
+  #perf {
+    position: fixed; top: 10px; left: 10px; z-index: 11; font-family: var(--mono); font-size: 11px;
+    background: rgba(0,0,0,0.6); padding: 6px 9px; border-radius: 6px; color: var(--ok); display: none; line-height: 1.6;
+  }
+  body.perf #perf { display: block; }
+
+  /* ---------- 書き出し ---------- */
+  #rec {
+    position: fixed; inset: 0; z-index: 30; display: none; align-items: flex-start; justify-content: center; pointer-events: none;
+  }
+  body.recording #rec { display: flex; }
+  #rec .box {
+    margin-top: 16px; pointer-events: auto; background: rgba(0,0,0,0.75); border: 1px solid var(--line);
+    border-radius: 999px; padding: 8px 10px 8px 18px; display: flex; align-items: center; gap: 12px; font-family: var(--mono); font-size: 12px;
+  }
+  #rec .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); animation: blink 1s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: 0.2; } }
+  body.recording #bar { opacity: 0 !important; pointer-events: none !important; }
+
+  #toast {
+    position: fixed; left: 50%; top: 18px; transform: translateX(-50%); z-index: 40;
+    background: rgba(20,20,23,0.95); border: 1px solid var(--line); padding: 10px 16px; border-radius: 10px;
+    font-size: 13px; opacity: 0; transition: opacity 0.2s; pointer-events: none; max-width: calc(100vw - 32px);
+  }
+  #toast.show { opacity: 1; }
+  #busy { position: fixed; inset: 0; z-index: 50; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,0.5); font-family: var(--mono); letter-spacing: 0.2em; font-size: 13px; }
+  body.busy #busy { display: flex; }
+
+  @media (max-width: 640px) {
+    .wrap { padding: 24px 16px 100px; }
+    #works { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 10px; }
+    .controls .btn { padding: 7px 10px; }
+  }
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="gl"></canvas></div>
+
+<section id="editor">
+  <div class="wrap">
+    <header class="brand">
+      <div>
+        <div class="kicker">PORTFOLIO MOTION GENERATOR</div>
+        <h1>HAYA<span>GAWARI</span></h1>
+      </div>
+      <p>イラストを並べるだけで、注目点を解析してキビキビ動くポートフォリオ映像を生成します。シードを変えるたびに別の演出に。画像はブラウザ内で処理され、どこにも送信されません。</p>
+    </header>
+
+    <div id="drop">
+      <div class="big">イラストをドロップ</div>
+      <div class="small">PNG / JPG / WebP ・ 複数可 ・ 2〜12枚くらいがおすすめ</div>
+      <div class="row">
+        <button class="btn" id="pick">ファイルを選ぶ</button>
+        <button class="btn" id="sample">サンプルで試す</button>
+      </div>
+      <input type="file" id="file" accept="image/*" multiple>
+    </div>
+
+    <div id="works"></div>
+    <div class="hint" id="works-hint" hidden>サムネイルをクリックすると、その位置を「一番見せたい箇所」に指定できます（赤丸＝自動検出、緑＝手動）。ドラッグで並べ替え。</div>
+
+    <div class="grid-form">
+      <div class="field">
+        <label>NAME / 作家名</label>
+        <input type="text" id="artist" placeholder="例: SHIRONAGASU" maxlength="40">
+      </div>
+      <div class="field">
+        <label>SUBTITLE / サブタイトル（任意）</label>
+        <input type="text" id="subline" placeholder="例: ILLUSTRATION WORKS 2026" maxlength="48">
+      </div>
+      <div class="field">
+        <label>LINK / SNS・URL（任意・エンディングに表示）</label>
+        <input type="text" id="handle" placeholder="例: @shironagasu" maxlength="48">
+      </div>
+      <div class="field">
+        <label>ASPECT / 画面比率</label>
+        <div class="seg" id="aspect">
+          <button data-v="16:9" class="on">16:9</button><button data-v="9:16">9:16</button><button data-v="1:1">1:1</button>
+        </div>
+      </div>
+      <div class="field">
+        <label>TEMPO / テンポ</label>
+        <div class="seg" id="pace">
+          <button data-v="relaxed">ゆったり</button><button data-v="normal" class="on">標準</button><button data-v="tight">キビキビ</button>
+        </div>
+      </div>
+      <div class="field">
+        <label>STYLE / スタイル</label>
+        <div class="seg" id="style">
+          <button data-v="auto" class="on">おまかせ</button><button data-v="NOIR">NOIR</button><button data-v="SWISS">SWISS</button><button data-v="POP">POP</button><button data-v="EDITORIAL">EDITORIAL</button><button data-v="GLITCH">GLITCH</button>
+        </div>
+      </div>
+      <div class="field">
+        <label>ORDER / 並び順</label>
+        <div class="seg" id="order">
+          <button data-v="keep" class="on">この順番</button><button data-v="shuffle">シードで並べ替え</button>
+        </div>
+      </div>
+      <div class="field">
+        <label>SEED / シード（同じシード＋同じ画像＝同じ映像）</label>
+        <div class="seedrow">
+          <input type="text" id="seed" maxlength="24" spellcheck="false">
+          <button class="btn" id="dice" title="新しいシード">🎲</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="cta">
+      <button class="btn primary" id="go" disabled>▶ 映像を生成して再生</button>
+      <span class="hint" id="go-hint">まずイラストを追加してください</span>
+    </div>
+
+    <p class="note">
+      操作: Space 再生/停止 ・ R 別バージョン（シード変更）・ ← → 前/次の作品 ・ F 全画面 ・ E 編集に戻る ・ P パフォーマンス表示<br>
+      書き出しはブラウザの録画機能（MediaRecorder）で実時間録画します。録画中はタブを前面に出したままにしてください。
+    </p>
+  </div>
+</section>
+
+<div id="bar">
+  <div id="seek"><div class="track"></div><div class="fill" id="seek-fill"></div></div>
+  <div class="controls">
+    <button class="btn" id="play">❚❚</button>
+    <div class="info">
+      <span id="time">0:00 / 0:00</span>
+      <span>STYLE <b id="i-style">-</b></span>
+      <span>BPM <b id="i-bpm">-</b></span>
+      <span>SEED <b id="i-seed">-</b></span>
+    </div>
+    <button class="btn" id="reroll" title="R">🎲 別バージョン</button>
+    <button class="btn" id="export">⤓ 書き出し</button>
+    <button class="btn" id="fs" title="F">⛶</button>
+    <button class="btn" id="edit" title="E">✎ 編集</button>
+  </div>
+</div>
+
+<div id="perf"></div>
+<div id="rec"><div class="box"><span class="dot"></span><span id="rec-label">REC</span><button class="btn" id="rec-cancel">中止</button></div></div>
+<div id="toast"></div>
+<div id="busy">ANALYZING…</div>
+
+<script type="module" src="src/main.js"></script>
+</body>
+</html>
