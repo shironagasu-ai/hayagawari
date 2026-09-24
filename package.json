@@ -1,0 +1,12 @@
+{
+  "name": "hayagawari",
+  "private": true,
+  "type": "module",
+  "description": "E2E テスト用の開発依存のみ。本体はビルド不要の静的ファイル。",
+  "scripts": {
+    "test": "node tests/e2e.mjs"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.56.0"
+  }
+}
