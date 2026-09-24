@@ -87,7 +87,7 @@ async function sheet(page, file, rows) {
 
 // ---- 1. 16:9 でサンプル読み込み → 生成 → 各時刻の描画
 {
-  const { page, errors } = await openPage({ width: 1280, height: 720 }, '#seed=TEST-0001&style=auto');
+  const { page, errors } = await openPage({ width: 1280, height: 720 }, '#seed=TEST-0001&style=auto&mode=pro');
   await page.evaluate(() => window.__hg.loadSamples());
   await page.waitForFunction(() => window.__hg.state.works.length === 6, null, { timeout: 30000 });
   const focal = await page.evaluate(() => window.__hg.state.works.map((w) => ({ name: w.name, f: w.focal.map((p) => [+p.x.toFixed(2), +p.y.toFixed(2), +p.size.toFixed(2)]) })));
@@ -235,7 +235,7 @@ async function sheet(page, file, rows) {
 
 // ---- 2. 9:16 縦型
 {
-  const { page, errors } = await openPage({ width: 540, height: 960 }, '#seed=VERT-0002&aspect=9:16');
+  const { page, errors } = await openPage({ width: 540, height: 960 }, '#seed=VERT-0002&aspect=9:16&mode=pro');
   await page.evaluate(() => window.__hg.loadSamples());
   await page.waitForFunction(() => window.__hg.state.works.length === 6, null, { timeout: 30000 });
   await page.fill('#artist', 'SHIRONAGASU');
@@ -249,6 +249,40 @@ async function sheet(page, file, rows) {
     await page.screenshot({ path: join(outDir, `v916-${i}.png`) });
   }
   check('no page errors (9:16)', errors.length === 0, errors.join('\n'));
+  await page.close();
+}
+
+// ---- 3. かんたんモード（初回の既定）: 画像・名前・比率だけで再生でき、詳細設定は無視される
+{
+  const { page, errors } = await openPage({ width: 1280, height: 800 }, '#seed=EASY-0003&style=GLITCH&opener=type');
+  check('simple mode is default', await page.evaluate(() => document.body.classList.contains('simple') && window.__hg.state.mode === 'simple'));
+  const vis = await page.evaluate(() => ['#artist', '#aspect', '#style', '#seed', '#opener', '#subline'].map((q) => document.querySelector(q).offsetParent !== null));
+  check('only name/aspect visible', JSON.stringify(vis) === JSON.stringify([true, true, false, false, false, false]), JSON.stringify(vis));
+  await page.evaluate(() => window.__hg.loadSamples());
+  await page.waitForFunction(() => window.__hg.state.works.length === 6, null, { timeout: 30000 });
+  check('play button label', (await page.textContent('#go')).trim() === '▶ 再生');
+  await page.click('.work:nth-child(1) .thumb');
+  check('focal editor stays closed in simple mode', await page.evaluate(() => document.querySelector('#fe').hidden));
+  await page.fill('#artist', 'EASY');
+  await page.click('#go');
+  await page.waitForTimeout(500);
+  const f1 = await page.evaluate(() => { const f = window.__hg.state.film; return { theme: f.theme, opener: f.opener, t: window.__hg.state.t, playing: window.__hg.state.playing }; });
+  check('simple ignores hidden style/opener from URL', !(f1.theme === 'GLITCH' && f1.opener === 'type'), JSON.stringify(f1));
+  check('simple mode plays', f1.playing && f1.t > 0);
+  await page.click('#reroll');
+  const s2 = await page.evaluate(() => window.__hg.state.seed);
+  check('reroll gives new seed', s2 !== 'EASY-0003');
+  await page.screenshot({ path: join(outDir, 'simple-play.png') });
+  await page.evaluate(() => window.__hg.toEditor());
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('#editor')).opacity === '1');
+  await page.screenshot({ path: join(outDir, 'simple-editor.png'), fullPage: false });
+  // こだわりに切り替えると隠れていた設定が戻る
+  await page.click('#mode button[data-v="pro"]');
+  const back = await page.evaluate(() => ({ style: window.__hg.state.style, vis: document.querySelector('#style').offsetParent !== null }));
+  check('pro mode restores hidden settings', back.style === 'GLITCH' && back.vis, JSON.stringify(back));
+  const saved = await page.evaluate(() => localStorage.getItem('hg-mode'));
+  check('mode remembered', saved === 'pro');
+  check('no page errors (simple)', errors.length === 0, errors.join('\n'));
   await page.close();
 }
 
