@@ -1,5 +1,10 @@
 # HAYAGAWARI — Portfolio Motion Generator
 
+<p align="center">
+  <a href="https://shironagasu-ai.github.io/hayagawari/"><img src="docs/media/preview.webp" alt="HAYAGAWARI で作ったポートフォリオ映像（作例: SHIRONAGASU WORKS）" width="720"></a>
+</p>
+<p align="center"><b><a href="https://shironagasu-ai.github.io/hayagawari/">▶ サイトで試す</a></b> ・ 作例: SHIRONAGASU WORKS（冒頭 16 秒。全編は <a href="assets/hero/hero-16x9.mp4">hero-16x9.mp4</a>）</p>
+
 イラストを複数枚アップロードすると、**注目点（目を引く箇所）を解析**して、キビキビ動くモーショングラフィックのポートフォリオ映像を自動生成する Web サービスです。
 **シードごとに振付・トランジション・配色・テンポが変わる**ので、使う人・押すたびに違う映像になります。
 
@@ -21,6 +26,13 @@
 2. サムネイルの丸が自動検出した注目点（番号＝優先順、1番が一番見せたい箇所）。サムネイルをクリックすると注目点エディタが開き、移動・追加・削除・優先順・寄りの範囲を編集できる。カードのドラッグで並べ替え
 3. 名前・比率（16:9 / 9:16 / 1:1）・テンポ・スタイル・オープニング・エンディング・シードを選んで「▶ 映像を生成して再生」
 4. 🎲（または R キー）で別バージョン。気に入ったら「⤓ 書き出し」で MP4 を保存
+
+### 作業の保存
+
+- 追加した画像・入力欄・シード・詳細設定・作品ごとのタイトルと手で直した注目点を、**このブラウザの中（IndexedDB）に自動で保存**し、次に開いたとき（スマホでタブが破棄されて読み込み直されたときも）元に戻す。外部には送信しない
+- 共有された URL にシード等が入っている場合は、URL の指定を優先する
+- 作品一覧の「すべて外す」で、画像と保存した画像をまとめて消せる（名前などの入力は残る）
+- 保存するのは直近の作業 1 件。ブラウザの設定やストレージ整理で消えることはある（Safari は長期間開かないと消すことがある）
 
 ### 書き出し
 
@@ -97,6 +109,12 @@ tests/e2e.mjs    … Playwright による E2E テスト
 - iPhone を含めて自動再生できるよう **H.264・音声なし**。解像度は 1280×720 / 720×1280、9 作品・約 45 秒で 1 本 3.5MB 前後（`--crf` で調整）
 - 画面外・映像の再生中・タブ非表示のときは止める。「動きを減らす」設定ではポスター画像のみ
 - 作例のクレジット表記は `index.html` の `#hero-credit`
+
+README 冒頭のプレビュー（`docs/media/preview.webp`、アニメーション WebP）は横長動画の冒頭 16 秒を 720px・20fps にしたもの。GitHub の README はリポジトリ内の MP4 をその場で再生できないため画像にしている。作り直すとき:
+
+```sh
+ffmpeg -t 16 -i assets/hero/hero-16x9.mp4 -vf "fps=20,scale=720:-1:flags=lanczos" -c:v libwebp_anim -quality 55 -compression_level 6 -loop 0 docs/media/preview.webp
+```
 
 ## ローカルで動かす / テスト
 
