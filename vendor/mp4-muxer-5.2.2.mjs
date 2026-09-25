@@ -1,3 +1,5 @@
+/*! mp4-muxer 5.2.2 | MIT License | Copyright (c) 2023 Vanilagy | https://github.com/Vanilagy/mp4-muxer
+ * 本体は npm: mp4-muxer@5.2.2 の build/mp4-muxer.mjs から未改変（この注記のみ追加）。ライセンス全文は同じフォルダの MP4-MUXER-LICENSE を参照。 */
 var __accessCheck = (obj, member, msg) => {
   if (!member.has(obj))
     throw TypeError("Cannot " + msg);
