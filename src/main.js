@@ -51,9 +51,13 @@ function readHash() {
   if (['keep', 'shuffle'].includes(h.get('order'))) state.order = h.get('order');
   if (h.get('opener')) state.opener = h.get('opener');
   if (h.get('closer')) state.closer = h.get('closer');
+  return h.get('adv') === '1'; // 詳細設定を開いた状態で作った映像の URL
 }
 function writeHash() {
-  const h = new URLSearchParams({ seed: state.seed, aspect: state.aspect, pace: state.pace, style: state.style, order: state.order, opener: state.opener, closer: state.closer });
+  // 閉じている（おまかせ）ときは詳細設定を URL に載せない。開いているときは再現用に全部載せる
+  const h = new URLSearchParams(state.advOpen
+    ? { adv: '1', seed: state.seed, aspect: state.aspect, pace: state.pace, style: state.style, order: state.order, opener: state.opener, closer: state.closer }
+    : { seed: state.seed, aspect: state.aspect });
   history.replaceState(null, '', '#' + h.toString());
 }
 
@@ -80,20 +84,22 @@ function bindSeg(id, key) {
 const ADV_DEFAULTS = { pace: 'normal', style: 'auto', opener: 'auto', closer: 'auto', order: 'keep' };
 const ADV_NAMES = { pace: 'テンポ', style: 'スタイル', opener: 'オープニング', closer: 'エンディング', order: '並び順' };
 
-// 閉じていても設定は効くので、既定から変えた項目を見出しに要約して見せる
+// 詳細設定は開いている間だけ反映。閉じている間はすべておまかせ（再生のたびに新しいシード）
+function changedAdv() {
+  return Object.keys(ADV_DEFAULTS).filter((k) => state[k] !== ADV_DEFAULTS[k]);
+}
+
 function updateAdvSummary() {
-  const changed = Object.keys(ADV_DEFAULTS).filter((k) => state[k] !== ADV_DEFAULTS[k]);
+  const changed = changedAdv();
   const el = $('#adv-sum');
-  if (!changed.length) {
-    el.textContent = 'すべておまかせ';
-  } else {
-    el.textContent = '変更あり: ' + changed.map((k) => {
-      const btn = document.querySelector(`#${k} button[data-v="${state[k]}"]`);
-      return `${ADV_NAMES[k]} ${btn ? btn.textContent : state[k]}`;
-    }).join('・');
-  }
-  el.classList.toggle('changed', changed.length > 0);
-  $('#adv-reset').hidden = changed.length === 0;
+  const list = changed.map((k) => {
+    const btn = document.querySelector(`#${k} button[data-v="${state[k]}"]`);
+    return `${ADV_NAMES[k]} ${btn ? btn.textContent : state[k]}`;
+  }).join('・');
+  if (!state.advOpen) el.textContent = 'オフ ・ すべておまかせ（再生のたびにランダム）';
+  else el.textContent = changed.length ? `反映中: ${list}` : 'オン ・ まだ変更なし';
+  el.classList.toggle('changed', state.advOpen && changed.length > 0);
+  $('#adv-reset').hidden = !state.advOpen || changed.length === 0;
 }
 
 function setAdvOpen(open) {
@@ -102,6 +108,8 @@ function setAdvOpen(open) {
   if (d.open !== state.advOpen) d.open = state.advOpen;
   body.classList.toggle('adv-open', state.advOpen);
   try { localStorage.setItem('hg-adv', state.advOpen ? '1' : '0'); } catch { /* 保存できなくても動作に影響なし */ }
+  state.film = null;
+  updateAdvSummary();
   renderWorks();
 }
 
@@ -163,7 +171,7 @@ function renderWorks() {
 }
 
 function estimateDuration() {
-  const beats = { tight: 6, normal: 8, relaxed: 10 }[state.pace];
+  const beats = { tight: 6, normal: 8, relaxed: 10 }[effectiveSettings().pace];
   return Math.round((6 + state.works.length * beats + 8) * (60 / 124));
 }
 
@@ -183,6 +191,7 @@ async function addSources(list) {
       try {
         const w = await analyzeImage(src, name);
         w.id = nextId++;
+        w.autoTitle = w.title;
         state.works.push(w);
       } catch (e) {
         console.warn(e);
@@ -204,20 +213,25 @@ function addFiles(files) {
 
 // ---------------------------------------------------------------- 映像の生成
 
+// 生成に使う設定。閉じている間は詳細設定・手動のタイトル/注目点を使わず、既定（おまかせ）で作る
+function effectiveSettings() {
+  return state.advOpen ? { ...state } : { ...state, ...ADV_DEFAULTS };
+}
+
 function build() {
   if (!state.works.length) return null;
   tf.dispose();
   for (const w of state.works) if (!w.tex) w.tex = renderer.createTexture(w.source);
   const [W, H] = ASPECTS[state.aspect];
-  let works = state.works;
-  if (state.order === 'shuffle') works = createRng('order|' + state.seed).shuffle(works);
+  const S = effectiveSettings();
+  let works = state.advOpen ? state.works : state.works.map((w) => ({ ...w, title: w.autoTitle, focal: w.autoFocal.map((f) => ({ ...f })) }));
+  if (S.order === 'shuffle') works = createRng('order|' + state.seed).shuffle(works);
   const t0 = performance.now();
   state.film = buildFilm({
-    works, seed: state.seed, W, H, tf, pace: state.pace,
-    theme: state.style === 'auto' ? null : state.style,
-    opener: state.opener === 'auto' ? null : state.opener,
-    closer: state.closer === 'auto' ? null : state.closer,
-    artist: $('#artist').value.trim(), subline: $('#subline').value.trim(), handle: $('#handle').value.trim(),
+    works, seed: state.seed, W, H, tf, pace: S.pace,
+    theme: S.style === 'auto' ? null : S.style,
+    opener: S.opener === 'auto' ? null : S.opener,
+    closer: S.closer === 'auto' ? null : S.closer,
     variant: state.variant || null,
     artist: $('#artist').value.trim(), subline: $('#subline').value.trim(), handle: $('#handle').value.trim(),
   });
@@ -431,7 +445,7 @@ function jump(dir) {
 
 // ---------------------------------------------------------------- イベント
 
-readHash();
+const hashAdv = readHash();
 $('#seed').value = state.seed;
 bindSeg('#aspect', 'aspect');
 bindSeg('#pace', 'pace');
@@ -463,7 +477,11 @@ window.addEventListener('drop', (e) => {
   if (state.playing) toEditor();
 });
 
-$('#go').addEventListener('click', () => { build(); play(true); wake(); });
+$('#go').addEventListener('click', () => {
+  // 閉じている（おまかせ）ときは押すたびに新しいシード＝毎回違う映像
+  if (!state.advOpen) { state.seed = randomSeed(); $('#seed').value = state.seed; }
+  build(); play(true); wake();
+});
 $('#play').addEventListener('click', () => (state.playing ? pause() : play(false)));
 $('#reroll').addEventListener('click', reroll);
 $('#edit').addEventListener('click', toEditor);
@@ -504,6 +522,7 @@ resize();
     const v = localStorage.getItem('hg-adv');
     open = v !== null ? v === '1' : localStorage.getItem('hg-mode') === 'pro'; // 旧「こだわり」設定からの引き継ぎ
   } catch { /* プライベートモード等 */ }
+  if (hashAdv) open = true; // 詳細設定つきで共有された URL は、その設定で再現する
   setAdvOpen(open);
   updateAdvSummary();
 }
