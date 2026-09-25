@@ -348,6 +348,10 @@ async function sheet(page, file, rows) {
   console.log('export info:', info.replace(/\s+/g, ' ').slice(0, 160));
   check('frame export available', info.includes('1コマずつ'), info);
   check('export includes audio by default', /音声: .*(AAC|Opus)/.test(info), info);
+  const vcodec = (info.match(/1コマずつ（(\S+) \/ MP4）/) || [])[1], acodec = (info.match(/音声: [^（]*（(\S+)）/) || [])[1];
+  console.log(`codecs: video=${vcodec} audio=${acodec}`);
+  // CI の Google Chrome では H.264 で書き出せるはず（AAC は Linux 版では無いことがあるので記録のみ）
+  if (process.env.EXPECT_H264 === '1') check('H.264 available in Google Chrome', vcodec === 'H.264', `video=${vcodec} audio=${acodec}`);
   // GPU なし（ソフトウェア描画＋ソフトウェア VP9）だと 1 秒あたり約 2 コマなので、先頭 3 秒だけ書き出す
   await page.evaluate(() => { window.__hg.xp.limit = 3; });
   const t0 = Date.now();

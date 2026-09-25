@@ -1,0 +1,82 @@
+# E2E テスト（PR と main へのプッシュ）と、テストが通った main だけを GitHub Pages へ公開する。
+# Pages の公開元は Settings → Pages → Source を「GitHub Actions」にしておくこと。
+name: CI / Pages
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# PR は新しいプッシュで古い実行を止める。main は公開を途中で止めないよう打ち切らない
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  e2e:
+    name: E2E (${{ matrix.browser }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        # chromium: Playwright の Chromium（H.264 / AAC エンコーダなし → VP9 / Opus で書き出し）
+        # chrome:   一般配布の Google Chrome（H.264 で書き出せることも確認）
+        browser: [chromium, chrome]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Install Playwright Chromium
+        if: matrix.browser == 'chromium'
+        run: npx playwright-core install --with-deps chromium
+      - name: Use Google Chrome (stable)
+        if: matrix.browser == 'chrome'
+        run: |
+          google-chrome --version
+          echo "CHROMIUM_PATH=$(command -v google-chrome)" >> "$GITHUB_ENV"
+          echo "EXPECT_H264=1" >> "$GITHUB_ENV"
+      - run: npm test
+      - name: Upload screenshots and exported videos
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-output-${{ matrix.browser }}
+          path: tests/output/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  deploy:
+    name: Deploy to GitHub Pages
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    needs: e2e
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+      # 公開するのは実行に必要なファイルだけ（tests / docs / package.json などは含めない）
+      - name: Collect site files
+        run: |
+          mkdir _site
+          cp -r index.html src vendor LICENSE _site/
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v5
