@@ -51,6 +51,14 @@
 - オープニング montage・shutter・countdown・knockout とエンディングの grid・knockout も注目点を中心に切り出す
 - zoom / iris トランジション: 注目点に向かって吸い込まれる / 閉じる
 
+## 書き出し
+
+- `src/export.js`: t = i / fps の絵を描き、同じタスク内で `new VideoFrame(canvas)` に取り込んで `VideoEncoder` へ。出力チャンクを mp4-muxer で MP4 に（`fastStart: 'in-memory'` で moov を先頭に）
+- エンコーダの待ち行列が 8 を超えたら `dequeue` を待つ（メモリ保護）。UI への制御返しは MessageChannel で行い、非表示タブのタイマー間引きを受けない
+- 書き出し中はレンダラーを「仮想解像度 × 倍率」（4K は 2 倍）にし、終わったら画面サイズに戻す
+- コーデックは H.264（High → Main → Baseline）→ VP9 → AV1 の順に `isConfigSupported` で判定。すべて不可なら MediaRecorder の実時間録画
+- ビットレートは画素数 × fps から算出（1080p60 ≈ 16Mbps、4K60 ≈ 45Mbps）
+
 ## 文言のルール
 
 - サブタイトル未入力なら何も出さない（PORTFOLIO 等を自動で補わない）。HUD 右上は「サブタイトル — 年」か年のみ
@@ -60,6 +68,5 @@
 
 - アニメ顔・目の検出モデル（ONNX / WebGPU）で注目点の精度を上げる
 - BGM を読み込み、BPM 検出（または手入力）でカットを曲に同期。書き出しに音声を含める
-- WebCodecs でフレーム単位のオフライン書き出し（実時間録画より確実。要 MP4 マルチプレクサ）
 - 注目点の「形」を使った演出（顕著性マップをマスクにしたシルエット抜き・注目領域だけ色を残すなど）
 - 作品ごとの手動オーバーライド（振付の固定・尺の延長）

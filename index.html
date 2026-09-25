@@ -123,6 +123,20 @@
   .seedrow button { flex: 0 0 auto; }
 
 
+
+  /* ---------- 書き出しダイアログ ---------- */
+  #xp { position: fixed; inset: 0; z-index: 46; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; padding: 16px; }
+  #xp[hidden] { display: none; }
+  .xp-box { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; width: min(520px, 100%); padding: 18px 20px; display: flex; flex-direction: column; gap: 14px; }
+  .xp-head b { font-size: 15px; }
+  #xp-info { margin-top: 0; line-height: 1.7; }
+  #xp-info .warn { color: #ffb86b; }
+  .xp-bar { height: 6px; border-radius: 3px; background: rgba(255,255,255,0.12); overflow: hidden; }
+  #xp-fill { height: 100%; background: var(--accent); transform-origin: 0 0; transform: scaleX(0); }
+  #xp-status { margin-top: 8px; font-family: var(--mono); }
+  .xp-actions { display: flex; justify-content: flex-end; gap: 10px; }
+  body.exporting #bar { opacity: 0 !important; pointer-events: none !important; }
+
   /* ---------- 詳細設定（アコーディオン） ---------- */
   #adv { margin-top: 26px; border: 1px solid var(--line); border-radius: 12px; background: rgba(20,20,23,0.6); }
   #adv > summary {
@@ -302,7 +316,7 @@
 
     <p class="note">
       操作: Space 再生/停止 ・ R 別バージョン（シード変更）・ ← → 前/次の作品 ・ F 全画面 ・ E 編集に戻る ・ P パフォーマンス表示<br>
-      書き出しはブラウザの録画機能（MediaRecorder）で実時間録画します。録画中はタブを前面に出したままにしてください。
+      書き出しは1コマずつ描いて MP4 にします（1080p / 4K・60 / 30fps）。対応していないブラウザでは実時間の録画になります。
     </p>
   </div>
 </section>
@@ -338,6 +352,17 @@
       <span id="fe-msg"></span>
     </div>
     <div class="fe-help">番号（中心）か円の縁をドラッグで移動 ・ それ以外をクリックで追加（最大4）・ 円の大きさ＝寄りの範囲（小さいほど強く寄る。ホイールでも調整）・ 1番が一番見せたい箇所（寄り→引きの着地点）・ キー: 1〜4 選択 / Delete 削除 / Esc 閉じる</div>
+  </div>
+</div>
+
+<div id="xp" hidden>
+  <div class="xp-box">
+    <div class="xp-head"><b>書き出し</b></div>
+    <div class="field"><label>RESOLUTION / 解像度</label><div class="seg" id="xp-res"><button data-v="1" class="on">1080p</button><button data-v="2">4K</button></div></div>
+    <div class="field"><label>FRAME RATE / フレームレート</label><div class="seg" id="xp-fps"><button data-v="60" class="on">60fps</button><button data-v="30">30fps</button></div></div>
+    <p class="hint" id="xp-info">判定中…</p>
+    <div id="xp-progress" hidden><div class="xp-bar"><div id="xp-fill"></div></div><div class="hint" id="xp-status"></div></div>
+    <div class="xp-actions"><button class="btn" id="xp-close">閉じる</button><button class="btn primary" id="xp-start">⤓ 書き出す</button></div>
   </div>
 </div>
 
