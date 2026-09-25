@@ -35,6 +35,49 @@ export async function pickEncoderConfig(width, height, fps) {
   return null;
 }
 
+// 音声: AAC を優先（一般配布の Chrome / Edge / Safari）、なければ Opus
+const AUDIO_CANDIDATES = [
+  { codec: 'mp4a.40.2', muxCodec: 'aac', label: 'AAC' },
+  { codec: 'opus', muxCodec: 'opus', label: 'Opus' },
+];
+
+export async function pickAudioConfig(sampleRate = 48000, numberOfChannels = 2) {
+  if (typeof AudioEncoder === 'undefined' || !window.isSecureContext) return null;
+  for (const c of AUDIO_CANDIDATES) {
+    const config = { codec: c.codec, sampleRate, numberOfChannels, bitrate: 192_000 };
+    try {
+      const res = await AudioEncoder.isConfigSupported(config);
+      if (res.supported) return { config: res.config || config, muxCodec: c.muxCodec, label: c.label };
+    } catch { /* 次の候補へ */ }
+  }
+  return null;
+}
+
+// AudioBuffer を丸ごとエンコードして muxer へ（0.1 秒ずつ AudioData にする）
+async function encodeAudio(buffer, aenc, muxer) {
+  let failure = null;
+  const encoder = new AudioEncoder({
+    output: (chunk, meta) => muxer.addAudioChunk(chunk, meta),
+    error: (e) => { failure = e; },
+  });
+  encoder.configure(aenc.config);
+  const sr = buffer.sampleRate, ch = buffer.numberOfChannels;
+  const step = Math.round(sr / 10);
+  const chans = Array.from({ length: ch }, (_, c) => buffer.getChannelData(c));
+  for (let off = 0; off < buffer.length; off += step) {
+    const n = Math.min(step, buffer.length - off);
+    const planar = new Float32Array(n * ch);
+    for (let c = 0; c < ch; c++) planar.set(chans[c].subarray(off, off + n), c * n);
+    const data = new AudioData({ format: 'f32-planar', sampleRate: sr, numberOfFrames: n, numberOfChannels: ch, timestamp: Math.round((off / sr) * 1e6), data: planar });
+    encoder.encode(data);
+    data.close();
+    if (failure) break;
+  }
+  await encoder.flush();
+  encoder.close();
+  if (failure) throw failure;
+}
+
 // タイマーの間引き（非表示タブで最大 1 秒）を受けずに、UI へ制御を返す
 const channel = new MessageChannel();
 const yieldQueue = [];
@@ -50,17 +93,21 @@ const yieldToUI = () => new Promise((r) => { yieldQueue.push(r); channel.port2.p
  * @param {object} o.enc pickEncoderConfig の結果
  * @param {(p:number, info:object)=>void} o.onProgress
  * @param {AbortSignal} o.signal
+ * @param {{buffer: AudioBuffer, enc: object}} [o.audio] 音声（省略で映像のみ）
  * @returns {Promise<Blob>}
  */
-export async function exportFrames({ canvas, renderAt, duration, fps, enc, onProgress, signal }) {
+export async function exportFrames({ canvas, renderAt, duration, fps, enc, onProgress, signal, audio }) {
   const { Muxer, ArrayBufferTarget } = await import('../vendor/mp4-muxer-5.2.2.mjs');
   const { width, height } = enc.config;
   const muxer = new Muxer({
     target: new ArrayBufferTarget(),
     video: { codec: enc.muxCodec, width, height, frameRate: fps },
+    ...(audio ? { audio: { codec: audio.enc.muxCodec, numberOfChannels: audio.buffer.numberOfChannels, sampleRate: audio.buffer.sampleRate } } : {}),
     fastStart: 'in-memory', // moov を先頭に置く（SNS やブラウザでの即再生向け）
     firstTimestampBehavior: 'offset',
   });
+  // 音声は先に一括でエンコード（オフライン合成済みなので速い）
+  if (audio) await encodeAudio(audio.buffer, audio.enc, muxer);
   let failure = null;
   const encoder = new VideoEncoder({
     output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),

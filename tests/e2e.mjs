@@ -304,7 +304,8 @@ async function sheet(page, file, rows) {
     films.push(await page.evaluate(() => { const f = window.__hg.state.film; const w = f.segments[1].work; return { seed: window.__hg.state.seed, theme: f.theme, opener: f.opener, title: w.title, fx: w.focal[0].x, playing: window.__hg.state.playing }; }));
   }
   console.log('closed films:', JSON.stringify(films.map((f) => [f.seed, f.theme, f.opener])));
-  check('closed ignores style/opener from URL', films.every((f) => !(f.theme === 'GLITCH' && f.opener === 'type')));
+  // ランダム抽選なので偶然一致することはある（1回あたり約 1/72）。4回すべて一致しなければ「指定を無視している」と判定
+  check('closed ignores style/opener from URL', !films.every((f) => f.theme === 'GLITCH' && f.opener === 'type'));
   check('closed: new seed every play', new Set(films.map((f) => f.seed)).size === 4 && !films.some((f) => f.seed === 'EASY-0003'));
   check('closed ignores manual title/focal', films.every((f) => f.title !== 'MANUAL TITLE' && f.fx !== 0.05));
   check('plays', films[3].playing);
@@ -346,6 +347,7 @@ async function sheet(page, file, rows) {
   const info = await page.textContent('#xp-info');
   console.log('export info:', info.replace(/\s+/g, ' ').slice(0, 160));
   check('frame export available', info.includes('1コマずつ'), info);
+  check('export includes audio by default', /音声: .*(AAC|Opus)/.test(info), info);
   // GPU なし（ソフトウェア描画＋ソフトウェア VP9）だと 1 秒あたり約 2 コマなので、先頭 3 秒だけ書き出す
   await page.evaluate(() => { window.__hg.xp.limit = 3; });
   const t0 = Date.now();
@@ -358,6 +360,19 @@ async function sheet(page, file, rows) {
   check('mp4 file written', size > 50_000 && dl.suggestedFilename().endsWith('.mp4'));
   const head = readFileSync(file).subarray(4, 8).toString('latin1');
   check('mp4 starts with ftyp', head === 'ftyp', head);
+  const bytes = readFileSync(file).toString('latin1');
+  check('mp4 has an audio track', bytes.includes('soun') && (bytes.includes('Opus') || bytes.includes('mp4a')));
+  const aud = await page.evaluate(async () => {
+    const buf = await window.__hg.state.lastExport.blob.arrayBuffer();
+    const ctx = new OfflineAudioContext(2, 48000, 48000);
+    const ab = await ctx.decodeAudioData(buf);
+    const d = ab.getChannelData(0);
+    let sum = 0, peak = 0;
+    for (let i = 0; i < d.length; i++) { sum += d[i] * d[i]; peak = Math.max(peak, Math.abs(d[i])); }
+    return { dur: ab.duration, rms: Math.sqrt(sum / d.length), peak };
+  });
+  console.log('audio:', JSON.stringify(aud));
+  check('exported audio decodes with sound', Math.abs(aud.dur - 3) < 0.15 && aud.rms > 0.01 && aud.peak <= 1.0, JSON.stringify(aud));
   const v = await page.evaluate(async () => {
     const blob = window.__hg.state.lastExport.blob;
     const film = window.__hg.state.film;
@@ -385,6 +400,29 @@ async function sheet(page, file, rows) {
   check('exported duration matches film', Math.abs(v.dur - v.expected) < 0.2, `${v.dur} vs ${v.expected}`);
   check('exported frames have content', v.stats.every((x) => x > 3), JSON.stringify(v.stats));
   check('renderer restored after export', await page.evaluate(() => window.__hg.renderer.bw < 1920 && !document.body.classList.contains('exporting')));
+  // 楽譜: モードごとの音数・決定性
+  const sc = await page.evaluate(async () => {
+    const { buildScore } = await import('/src/audio.js');
+    const f = window.__hg.state.film, seed = window.__hg.state.seed;
+    const full = buildScore(f, seed, 'full'), sfx = buildScore(f, seed, 'sfx'), off = buildScore(f, seed, 'off');
+    const again = buildScore(f, seed, 'full');
+    return { full: full.notes.length, sfx: sfx.notes.length, off: off.notes.length, beat: full.notes.filter((n) => n.layer === 'beat').length, same: JSON.stringify(full.notes) === JSON.stringify(again.notes) };
+  });
+  console.log('score:', JSON.stringify(sc));
+  check('score: full > sfx > off=0, deterministic', sc.full > sc.sfx && sc.sfx > 0 && sc.off === 0 && sc.beat > 0 && sc.same);
+  // 音声なしで書き出すと音声トラックが無い
+  await page.click('#export');
+  await page.click('#xp-snd button[data-v="off"]');
+  await page.waitForFunction(() => !document.querySelector('#xp-info').textContent.includes('判定中'));
+  await page.evaluate(() => { window.__hg.xp.limit = 1; });
+  const [dl2] = await Promise.all([page.waitForEvent('download', { timeout: 300000 }), page.click('#xp-start')]);
+  const file2 = join(outDir, 'export-mute.mp4');
+  await dl2.saveAs(file2);
+  check('sound off → no audio track', !readFileSync(file2).toString('latin1').includes('soun'));
+  // プレーヤーの音ボタンが 3 段階で切り替わる
+  const labels = [];
+  for (let k = 0; k < 3; k++) { await page.click('#snd'); labels.push(await page.textContent('#snd')); }
+  check('sound button cycles', labels.join('|').includes('効果音のみ') && labels.join('|').includes('なし') && labels.join('|').includes('ビート'), labels.join('|'));
   // 中止できること
   await page.click('#export');
   await page.waitForFunction(() => !document.querySelector('#xp-info').textContent.includes('判定中'));
