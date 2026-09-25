@@ -21,10 +21,10 @@
 
 | 軸 | 候補 |
 |---|---|
-| テーマ | NOIR / SWISS / POP / EDITORIAL / GLITCH（背景モード・書体・グレイン・色収差・BPM 帯・各演出の重み） |
+| テーマ | NOIR / SWISS / POP / EDITORIAL / GLITCH / MONO / NEON / PASTEL / RETRO（背景モード・書体・グレイン・色収差・BPM 帯・各演出の重み）。「ミックス」は作品ごとに抽選（連続しない）し、オープニング/エンディング/HUD/BPM はベースのスタイル |
 | BPM | テーマの帯域＋テンポ設定（1作品 = 6 / 8 / 10 拍） |
-| オープニング | montage（注目点の高速カット→名前）/ type（1文字ずつ拍で打つ）/ shutter（寄りの短冊が閉じて開く）/ countdown（3・2・1 の数字で作品を抜く）/ knockout（巨大な名前の形で作品を抜く） |
-| エンディング | grid（全作品グリッド→引き）/ filmstrip（フィルムが流れ込んで止まる）/ stack（カードが落ちて積み重なる）/ knockout（名前の形に全作品を流す） |
+| オープニング | montage / type / shutter / countdown / knockout / slice（上下2段の寄りがすれ違い、名前の上下が噛み合う）/ tunnel（入れ子の額の奥へ吸い込まれる）/ boot（端末風の起動ログで作品を読み込む） |
+| エンディング | grid / filmstrip / stack / knockout / orbit（楕円軌道を回って止まる）/ curtain（短冊の幕が上がると名前）/ rewind（逆順に加速して白く飛ぶ） |
 | 振付 | focus（寄りで溜めて一気に引く）/ cuts（拍ごとの寄りカット→カラーブロック開示）/ split（分割パネル）/ pan（全面パン）/ card（カード＋残像＋虫眼鏡コールアウト）/ mosaic（注目点に近い順にタイルが集まりカチッと詰まる）/ spotlight（沈めた絵の注目点を照らし渡り、全開）/ triptych（3枚の短冊が溜めて合体）/ lockon（注目点を順にブラケットでロックオン） |
 | 背景装飾 | 巨大番号 / 流れる袋文字 / グリッド＋トンボ / 作品のぼかし / 斜めストライプ / ドット |
 | トランジション | whip / zoom / iris / slices / glitch / bars / cut / spin / door（直前と同じものは避ける） |
@@ -50,6 +50,11 @@
 - mosaic: 注目点に近いタイルから組み上がる / spotlight: 注目点を照らす / lockon: 注目点を順に照準
 - オープニング montage・shutter・countdown・knockout とエンディングの grid・knockout も注目点を中心に切り出す
 - zoom / iris トランジション: 注目点に向かって吸い込まれる / 閉じる
+
+## 文言のルール
+
+- サブタイトル未入力なら何も出さない（PORTFOLIO 等を自動で補わない）。HUD 右上は「サブタイトル — 年」か年のみ
+- 作家名が未入力のときだけ、名前の代わりに PORTFOLIO を出す
 
 ## 今後のアイデア
 
