@@ -394,9 +394,21 @@ async function sheet(page, file, rows) {
     for (const ft of [0.2, 0.5, 0.8]) {
       video.currentTime = expDur * ft;
       await new Promise((r) => { video.onseeked = r; });
+      // seeked 直後はデコード済みのコマがまだ無いことがある（Chrome の H.264 など）。
+      // 表示されるまで待ち、何も描けなかった（全画素が透明）なら少し待って取り直す
+      if (video.requestVideoFrameCallback) await Promise.race([new Promise((r) => video.requestVideoFrameCallback(r)), new Promise((r) => setTimeout(r, 500))]);
       const c = document.createElement('canvas'); c.width = 64; c.height = 36;
-      const g = c.getContext('2d'); g.drawImage(video, 0, 0, 64, 36);
-      const d = g.getImageData(0, 0, 64, 36).data;
+      const g = c.getContext('2d');
+      let d;
+      for (let tries = 0; tries < 10; tries++) {
+        g.clearRect(0, 0, 64, 36);
+        g.drawImage(video, 0, 0, 64, 36);
+        d = g.getImageData(0, 0, 64, 36).data;
+        let drawn = false;
+        for (let i = 3; i < d.length; i += 4) if (d[i] > 0) { drawn = true; break; }
+        if (drawn) break;
+        await new Promise((r) => setTimeout(r, 100));
+      }
       let sum = 0, sum2 = 0;
       for (let i = 0; i < d.length; i += 4) { const y = (d[i] + d[i + 1] + d[i + 2]) / 3; sum += y; sum2 += y * y; }
       const n = d.length / 4, m = sum / n;
