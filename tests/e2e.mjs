@@ -12,7 +12,7 @@ try { ({ chromium } = await import('playwright-core')); } catch { ({ chromium } 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const outDir = join(root, 'tests', 'output');
 mkdirSync(outDir, { recursive: true });
-const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.png': 'image/png' };
+const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.jpg': 'image/jpeg', '.mp4': 'video/mp4', '.woff2': 'font/woff2' };
 const server = createServer((req, res) => {
   let p = join(root, decodeURIComponent(req.url.split('?')[0].split('#')[0]));
   if (existsSync(p) && statSync(p).isDirectory()) p = join(p, 'index.html');
@@ -467,6 +467,44 @@ async function sheet(page, file, rows) {
   const vals = await page.evaluate(() => ['#artist', '#subline', '#handle'].map((id) => document.querySelector(id).value));
   check('no form restore shift after back navigation', vals.every((v) => v === ''), JSON.stringify(vals));
   check('no page errors (back navigation)', errors.length === 0, errors.join('\n'));
+  await page.close();
+}
+
+// ---- 6. トップ: 作例動画・ロゴ・ボタン
+for (const [name, vp, file] of [['desktop', { width: 1440, height: 900 }, 'hero-16x9'], ['phone', { width: 390, height: 844 }, 'hero-9x16']]) {
+  const { page, errors } = await openPage(vp);
+  const hero = await page.evaluate(() => {
+    const v = document.querySelector('#hero-video');
+    const logo = document.querySelector('#logo');
+    return {
+      src: v.src.split('/').pop(), poster: v.poster.split('/').pop(), muted: v.muted, inline: v.playsInline,
+      h264: v.canPlayType('video/mp4; codecs="avc1.640028"') !== '',
+      logoW: logo.querySelector('.lg.top').getBoundingClientRect().right, viewW: innerWidth,
+      layers: logo.querySelectorAll('.lg i').length,
+    };
+  });
+  check(`hero video picks ${file} (${name})`, hero.src === `${file}.mp4` && hero.poster === `${file}.jpg` && hero.muted && hero.inline, JSON.stringify(hero));
+  check(`logo built and fits (${name})`, hero.layers === 20 && hero.logoW <= hero.viewW, `${hero.logoW.toFixed(0)} <= ${hero.viewW}`);
+  const poster = await page.evaluate((f) => fetch(`assets/hero/${f}.jpg`).then((r) => r.ok && r.headers.get('content-type')), file);
+  check(`hero poster served (${name})`, poster === 'image/jpeg', String(poster));
+  // H.264 を再生できるブラウザ（一般配布の Chrome 等）では実際に動いていること、映像の再生中は止まること
+  if (hero.h264) {
+    await page.waitForFunction(() => document.querySelector('#hero-video').currentTime > 0.5, null, { timeout: 30000 });
+    check(`hero video plays (${name})`, true);
+    await page.click('#hero-sample');
+    await page.waitForFunction(() => window.__hg.state.works.length === 6, null, { timeout: 30000 });
+    await page.click('#go');
+    await page.waitForTimeout(500);
+    check(`hero video pauses during playback (${name})`, await page.evaluate(() => document.querySelector('#hero-video').paused));
+  } else {
+    console.log(`(hero video playback skipped: no H.264 in this browser)`);
+    await page.click('#hero-sample');
+    await page.waitForFunction(() => window.__hg.state.works.length === 6, null, { timeout: 30000 });
+  }
+  check(`hero sample button loads samples (${name})`, await page.evaluate(() => window.__hg.state.works.length === 6));
+  await page.evaluate(() => { document.querySelector('#editor').scrollTop = 0; });
+  await page.screenshot({ path: join(outDir, `hero-${name}.png`) });
+  check(`no page errors (hero ${name})`, errors.length === 0, errors.join('\n'));
   await page.close();
 }
 

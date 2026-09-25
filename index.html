@@ -7,6 +7,8 @@
 <meta name="description" content="イラストをアップロードすると、注目点を解析してキビキビ動くポートフォリオ映像を自動生成。シードごとに違う演出。">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23111'/%3E%3Crect x='6' y='6' width='12' height='20' fill='%23ff4b3e'/%3E%3Crect x='20' y='6' width='6' height='20' fill='%23f3f0e8'/%3E%3C/svg%3E">
 <style>
+  /* ロゴ専用書体: Archivo（SIL OFL 1.1、assets/fonts/ARCHIVO-OFL.txt）をロゴの 7 文字だけに絞ったもの */
+  @font-face { font-family: "HG Logo"; src: url(assets/fonts/archivo-logo.woff2) format("woff2"); font-weight: 100 900; font-stretch: 62% 125%; font-display: block; }
   :root {
     --bg: #0b0b0d; --panel: #141417; --line: #2a2a30; --ink: #f1efe9; --sub: #8d8b86;
     --accent: #ff4b3e; --ok: #7dffb2;
@@ -31,10 +33,34 @@
   }
   body.playing #editor { opacity: 0; pointer-events: none; }
   .wrap { max-width: 1080px; margin: 0 auto; padding: 40px 20px 120px; }
-  header.brand { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; border-bottom: 1px solid var(--line); padding-bottom: 18px; }
-  .brand h1 { font-size: clamp(34px, 7vw, 64px); font-weight: 900; letter-spacing: -0.02em; line-height: 0.95; }
-  .brand h1 span { color: var(--accent); }
-  .brand p { color: var(--sub); font-size: 13px; line-height: 1.7; max-width: 420px; }
+  /* ---------- トップ（背景に作例動画） ---------- */
+  #hero { position: relative; height: min(100svh, 900px); min-height: 560px; overflow: hidden; display: flex; align-items: flex-end; background: #000; }
+  #hero-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0.6; }
+  .hero-shade { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(11,11,13,0.35) 0%, rgba(11,11,13,0.05) 35%, rgba(11,11,13,0.8) 78%, var(--bg) 100%); }
+  .hero-in { position: relative; width: 100%; max-width: 1080px; margin: 0 auto; padding: 0 20px 72px; }
+  /* ロゴ: 文字を横に切って下半分をずらした形（場面の切り替え＝早変わり）。表示時に 1 字ずつ組み上がる */
+  .logo { position: relative; font-size: 100px; font-family: "HG Logo", var(--sans); font-weight: 900; font-variation-settings: "wght" 900, "wdth" 112; letter-spacing: -0.02em; line-height: 0.88; white-space: nowrap; }
+  .logo > span.b { color: var(--accent); }
+  .logo.built, .logo.built > span.b { color: transparent; }
+  .logo .lg { position: absolute; left: 0; top: 0; color: var(--ink); pointer-events: none; }
+  .logo .lg.top { clip-path: inset(-10% -5% 50% -5%); }
+  .logo .lg.bot { clip-path: inset(50% -5% -10% -5%); transform: translateX(var(--cut, 0.045em)); }
+  .logo .lg i { display: inline-block; font-style: normal; }
+  .logo .lg i.b { color: var(--accent); }
+  .logo.intro .lg i { animation: lg-in 0.56s cubic-bezier(0.85, 0, 0.12, 1) both; animation-delay: calc(var(--k) * 38ms + var(--d, 0ms)); }
+  .logo.intro .lg.bot { --d: 70ms; animation: lg-cut 0.9s cubic-bezier(0.85, 0, 0.12, 1) both; }
+  .logo.blip .lg.bot { animation: lg-blip 0.34s cubic-bezier(0.85, 0, 0.12, 1); }
+  .logo.blip .lg.top { animation: lg-blip-top 0.34s cubic-bezier(0.85, 0, 0.12, 1); }
+  @keyframes lg-in { from { transform: translateY(0.9em); opacity: 0; } 12% { opacity: 1; } to { transform: none; opacity: 1; } }
+  @keyframes lg-cut { from { transform: translateX(-0.35em); } 55% { transform: translateX(-0.35em); } to { transform: translateX(var(--cut, 0.045em)); } }
+  @keyframes lg-blip { 40% { transform: translateX(0.22em); } to { transform: translateX(var(--cut, 0.045em)); } }
+  @keyframes lg-blip-top { 40% { transform: translateX(-0.08em); } to { transform: none; } }
+  @media (prefers-reduced-motion: reduce) { .logo .lg i, .logo .lg.bot, .logo .lg.top { animation: none !important; } }
+  .lead { margin-top: 18px; color: #c9c6bf; font-size: 14px; line-height: 1.8; max-width: 520px; text-shadow: 0 1px 12px rgba(0,0,0,0.6); }
+  .row.hero-cta { justify-content: flex-start; margin-top: 24px; }
+  .hero-cta .btn { padding: 13px 26px; font-size: 14px; background: rgba(20,20,23,0.7); }
+  .hero-cta .btn.primary { background: var(--accent); }
+  .hero-credit { position: absolute; right: 16px; bottom: 14px; font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em; color: rgba(241,239,233,0.45); }
   .kicker { font-family: var(--mono); font-size: 11px; letter-spacing: 0.25em; color: var(--sub); margin-bottom: 8px; }
 
   #drop {
@@ -211,6 +237,9 @@
 
   @media (max-width: 640px) {
     .wrap { padding: 24px 16px 100px; }
+    .hero-in { padding: 0 16px 60px; }
+    .logo { font-variation-settings: "wght" 900, "wdth" 78; letter-spacing: -0.01em; }
+    .hero-credit { left: 16px; right: auto; }
     #works { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 10px; }
     .controls .btn { padding: 7px 10px; }
   }
@@ -220,14 +249,21 @@
 <div id="stage"><canvas id="gl"></canvas></div>
 
 <section id="editor">
-  <div class="wrap">
-    <header class="brand">
-      <div>
-        <div class="kicker">PORTFOLIO MOTION GENERATOR</div>
-        <h1>HAYA<span>GAWARI</span></h1>
+  <header id="hero">
+    <video id="hero-video" muted loop playsinline preload="metadata" aria-hidden="true" tabindex="-1"></video>
+    <div class="hero-shade"></div>
+    <div class="hero-in">
+      <div class="kicker">PORTFOLIO MOTION GENERATOR</div>
+      <h1 class="logo" id="logo" aria-label="HAYAGAWARI">HAYA<span class="b">GAWARI</span></h1>
+      <p class="lead">イラストを並べるだけで、注目点を解析してキビキビ動くポートフォリオ映像を生成します。シードを変えるたびに別の演出に。画像はブラウザ内で処理され、どこにも送信されません。</p>
+      <div class="row hero-cta">
+        <button class="btn primary" id="hero-pick">イラストで作る</button>
+        <button class="btn" id="hero-sample">サンプルで試す</button>
       </div>
-      <p>イラストを並べるだけで、注目点を解析してキビキビ動くポートフォリオ映像を生成します。シードを変えるたびに別の演出に。画像はブラウザ内で処理され、どこにも送信されません。</p>
-    </header>
+    </div>
+    <div class="hero-credit" id="hero-credit">作例：内蔵サンプル（HAYAGAWARI で生成）</div>
+  </header>
+  <div class="wrap">
 
     <div id="drop">
       <div class="big">イラストをドロップ</div>

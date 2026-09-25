@@ -43,6 +43,7 @@ const state = {
   loop: true,
 };
 let nextId = 1;
+const hero = { video: $('#hero-video'), visible: true }; // トップの作例動画
 
 // ---------------------------------------------------------------- URL ハッシュ（シード等の共有）
 
@@ -212,7 +213,7 @@ async function addSources(list) {
 function addFiles(files) {
   const imgs = [...files].filter((f) => f.type.startsWith('image/'));
   if (!imgs.length) return;
-  addSources(imgs.map((f) => ({ src: f, name: f.name })));
+  return addSources(imgs.map((f) => ({ src: f, name: f.name })));
 }
 
 // ---------------------------------------------------------------- 映像の生成
@@ -284,6 +285,7 @@ function play(fromStart = true) {
   state.playing = true;
   body.classList.add('playing');
   $('#play').textContent = '❚❚';
+  heroSync();
   syncAudio();
   poke();
 }
@@ -298,6 +300,7 @@ function pause() {
 function toEditor() {
   pause();
   body.classList.remove('playing');
+  heroSync();
   if (document.fullscreenElement) document.exitFullscreen();
 }
 
@@ -610,10 +613,73 @@ $('#seed').addEventListener('input', (e) => { state.seed = e.target.value.trim()
 $('#dice').addEventListener('click', () => { state.seed = randomSeed(); $('#seed').value = state.seed; state.film = null; });
 
 $('#pick').addEventListener('click', () => $('#file').click());
-$('#file').addEventListener('change', (e) => { addFiles(e.target.files); e.target.value = ''; });
+let scrollToDrop = false; // トップのボタンから読み込んだら、読み込み後に作品一覧まで送る
+$('#file').addEventListener('change', async (e) => {
+  const files = e.target.files;
+  const fromHero = scrollToDrop;
+  scrollToDrop = false;
+  await addFiles(files);
+  e.target.value = '';
+  if (fromHero) $('#drop').scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
 $('#sample').addEventListener('click', () => {
   addSources(makeSamples('samples').map((s) => ({ src: s.canvas, name: s.name })));
 });
+
+// ---------------------------------------------------------------- トップの作例動画
+
+function heroSync() {
+  const v = hero.video;
+  if (!v.src) return;
+  const on = hero.visible && !state.playing && !body.classList.contains('playing') && !document.hidden;
+  if (on && v.paused) v.play().catch(() => { /* 省電力モード等で自動再生できないときはポスター画像のまま */ });
+  else if (!on && !v.paused) v.pause();
+}
+function setupHero() {
+  const v = hero.video;
+  // 縦長の画面には縦動画。回転しても差し替えない（読み込み直しになるため）
+  const base = `assets/hero/hero-${matchMedia('(max-aspect-ratio: 1/1)').matches ? '9x16' : '16x9'}`;
+  v.poster = base + '.jpg';
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return; // 動きを減らす設定ならポスターのみ
+  v.src = base + '.mp4';
+  // 画面外・再生中・タブ非表示のときは止めて電池と GPU を節約
+  new IntersectionObserver(([e]) => { hero.visible = e.isIntersecting; heroSync(); }).observe($('#hero'));
+  document.addEventListener('visibilitychange', heroSync);
+  heroSync();
+}
+$('#hero-pick').addEventListener('click', () => { scrollToDrop = true; $('#file').click(); });
+$('#hero-sample').addEventListener('click', async () => {
+  await addSources(makeSamples('samples').map((s) => ({ src: s.canvas, name: s.name })));
+  $('#drop').scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
+setupHero();
+
+// ロゴ: 上下 2 枚に切った文字を重ね、1 字ずつ組み上げる。その後はときどき一瞬ずれる
+function setupLogo() {
+  const logo = $('#logo');
+  const letters = () => [...'HAYAGAWARI'].map((c, k) => `<i class="${k >= 4 ? 'b' : ''}" style="--k:${k}">${c}</i>`).join('');
+  logo.insertAdjacentHTML('beforeend', `<span class="lg top" aria-hidden="true">${letters()}</span><span class="lg bot" aria-hidden="true">${letters()}</span>`);
+  logo.classList.add('built', 'intro');
+  // 書体の横幅は端末で変わるので、実際の幅を測って欄の幅にぴったり合わせる（最大 150px）
+  const fit = () => {
+    logo.style.fontSize = '100px';
+    const w = logo.querySelector('.lg.top').getBoundingClientRect().width;
+    const avail = logo.parentElement.clientWidth - parseFloat(getComputedStyle(logo.parentElement).paddingLeft) * 2;
+    logo.style.fontSize = Math.max(40, Math.min(150, (100 * avail * 0.97) / w)) + 'px';
+  };
+  fit();
+  document.fonts.ready.then(fit);
+  window.addEventListener('resize', fit);
+  setTimeout(() => logo.classList.remove('intro'), 1600); // 残すと blip の後に登場アニメが再生されてしまう
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  setInterval(() => {
+    if (!hero.visible || document.hidden || state.playing) return;
+    logo.classList.remove('blip');
+    void logo.offsetWidth; // アニメーションを最初からやり直す
+    logo.classList.add('blip');
+  }, 5200);
+}
+setupLogo();
 const drop = $('#drop');
 window.addEventListener('dragover', (e) => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); drop.classList.add('over'); } });
 window.addEventListener('dragleave', (e) => { if (!e.relatedTarget) drop.classList.remove('over'); });
@@ -695,6 +761,7 @@ window.__hg = {
   build, play, pause, reroll, toEditor, setAdvOpen, openExport, xp, audio, setSound,
   loadSamples: () => addSources(makeSamples('samples').map((s) => ({ src: s.canvas, name: s.name }))),
   renderAt: (t) => { state.film.render(renderer, t); state.t = t; },
+  resize, // resize(scale): 仮想解像度 × scale で描く（tools/make-hero.mjs 用）
   // GPU に溜まった描画命令を最後まで実行させる（1px 読み出しで同期。gl.finish は Chrome では待たない）
   sync: () => { const gl = renderer.gl; const px = new Uint8Array(4); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); return px[3]; },
   setSeed: (s) => { state.seed = s; $('#seed').value = s; state.film = null; },

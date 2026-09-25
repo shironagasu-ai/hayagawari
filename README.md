@@ -80,8 +80,23 @@ tests/e2e.mjs    … Playwright による E2E テスト
 
 - **PR と main へのプッシュ**で E2E テストを実行。Playwright の Chromium と、一般配布の Google Chrome の 2 種類で並行して回す（Chrome では H.264 で書き出せることも確認）
 - テストのスクリーンショットと書き出した動画は、実行結果の Artifacts から 7 日間ダウンロードできる
-- **main でテストが通ったときだけ** GitHub Pages へ公開（`index.html` / `src` / `vendor` / `LICENSE` のみ）
+- **main でテストが通ったときだけ** GitHub Pages へ公開（`index.html` / `src` / `vendor` / `assets` / `LICENSE` のみ）
 - 事前設定: Settings → Pages → Build and deployment → Source を **GitHub Actions** にする
+
+## トップの作例動画
+
+トップ画面の背景で流れる動画は `assets/hero/` にある。縦長の画面では `hero-9x16`、それ以外は `hero-16x9` を使う（各 `.mp4` と、読み込み前・動きを減らす設定用のポスター画像 `.jpg`）。
+
+- HAYAGAWARI 自身の描画から作る。作り直すとき（イラストを差し替えるとき）は:
+
+  ```sh
+  FFMPEG=/path/to/ffmpeg node tools/make-hero.mjs --images ./my-illustrations --name "SHIRONAGASU" --seed HERO-01
+  ```
+
+  `--images` を省くと内蔵サンプルで作る。libx264 入りの ffmpeg が必要（`pip install imageio-ffmpeg` で入る静的ビルドでも可）
+- iPhone を含めて自動再生できるよう **H.264・音声なし**。解像度は 1280×720 / 720×1280 で 1 本 3MB 前後
+- 画面外・映像の再生中・タブ非表示のときは止める。「動きを減らす」設定ではポスター画像のみ
+- 作例のクレジット表記は `index.html` の `#hero-credit`
 
 ## ローカルで動かす / テスト
 
@@ -93,5 +108,7 @@ npm ci && npm test              # E2E（Chromium は CHROMIUM_PATH で指定可�
 ## ライセンス / クレジット
 
 MIT
+
+ロゴ書体: [Archivo](https://github.com/Omnibus-Type/Archivo)（SIL Open Font License 1.1, © The Archivo Project Authors）をロゴの 7 文字だけに絞って `assets/fonts/archivo-logo.woff2` に同梱（約 4KB）。ライセンス文は `assets/fonts/ARCHIVO-OFL.txt`
 
 同梱ライブラリ: [mp4-muxer](https://github.com/Vanilagy/mp4-muxer) 5.2.2（MIT, © Vanilagy）— ライセンス文は `vendor/MP4-MUXER-LICENSE`。開発は終了しており後継は Mediabunny（MPL-2.0・約 670KB）だが、単一映像トラックの MP4 化には十分で小さい（約 69KB）ためこちらを採用。書き出し時にだけ読み込む
