@@ -456,6 +456,20 @@ async function sheet(page, file, rows) {
   await page.close();
 }
 
+// ---- 5. 別ページから戻ったとき、ブラウザのフォーム復元で作品タイトルが作家名欄などにずれて入らない
+{
+  const { page, errors } = await openPage({ width: 1280, height: 720 });
+  await page.evaluate(() => window.__hg.loadSamples());
+  await page.waitForFunction(() => window.__hg.state.works.length === 6, null, { timeout: 30000 });
+  await page.goto('http://localhost:8941/elsewhere'); // 404 ページ（別ドキュメントなら何でもよい）
+  errors.length = 0;
+  await page.goBack({ waitUntil: 'networkidle' });
+  const vals = await page.evaluate(() => ['#artist', '#subline', '#handle'].map((id) => document.querySelector(id).value));
+  check('no form restore shift after back navigation', vals.every((v) => v === ''), JSON.stringify(vals));
+  check('no page errors (back navigation)', errors.length === 0, errors.join('\n'));
+  await page.close();
+}
+
 await browser.close();
 server.close();
 console.log(fails.length ? `\n${fails.length} FAILED: ${fails.join(', ')}` : '\nALL PASS');

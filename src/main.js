@@ -138,7 +138,7 @@ function renderWorks() {
       <div class="thumb" style="background-image:url(${w.thumb})"><div class="ptbox" style="position:absolute;inset:0"></div></div>
       <span class="grip">⠿ ${String(i + 1).padStart(2, '0')}</span>
       <button class="x" title="削除">✕</button>
-      <div class="meta"><input class="title" value="" maxlength="40" spellcheck="false"></div>`;
+      <div class="meta"><input class="title" value="" autocomplete="off" maxlength="40" spellcheck="false"></div>`;
     el.querySelector('input.title').value = w.title;
     // サムネイルは contain 表示なので、画像の実表示領域に点を合わせる
     const thumb = el.querySelector('.thumb');
