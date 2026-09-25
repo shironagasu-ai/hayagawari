@@ -1,6 +1,6 @@
 // トップページ背景のループ動画を作る。リポジトリルートで:
 //   FFMPEG=/path/to/ffmpeg node tools/make-hero.mjs [--images DIR] [--name NAME] [--sub SUBTITLE] [--seed SEED] [--style MIX]
-// --images を省略すると内蔵サンプルで作る。出力: assets/hero/hero-16x9.mp4, hero-9x16.mp4 と各ポスター画像（.jpg）
+// --images を省略すると内蔵サンプルで作る。画像はファイル名順に並ぶ（先頭の「1 」などの番号はタイトルから除く）。出力: assets/hero/hero-16x9.mp4, hero-9x16.mp4 と各ポスター画像（.jpg）
 //
 // HAYAGAWARI 自身の描画を 1 コマずつ JPEG で取り出し、ffmpeg で H.264（音声なし）に変換する。
 // H.264 にするのは iPhone の Safari を含めて背景で自動再生できるようにするため（VP9 は iOS で再生できないことがある）。
@@ -55,6 +55,8 @@ for (const job of JOBS) {
   if (images) {
     await page.setInputFiles('#file', images);
     await page.waitForFunction((n) => window.__hg.state.works.length === n, images.length);
+    // 並び順用の先頭の番号（例: "1 No. 636.png"）はタイトルから外す
+    await page.evaluate(() => window.__hg.state.works.forEach((w) => { w.title = w.title.replace(/^\d+\s+/, ''); }));
   } else {
     await page.evaluate(() => window.__hg.loadSamples());
     await page.waitForFunction(() => window.__hg.state.works.length >= 6);
