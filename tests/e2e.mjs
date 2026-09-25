@@ -12,7 +12,7 @@ try { ({ chromium } = await import('playwright-core')); } catch { ({ chromium } 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const outDir = join(root, 'tests', 'output');
 mkdirSync(outDir, { recursive: true });
-const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png' };
+const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.png': 'image/png' };
 const server = createServer((req, res) => {
   let p = join(root, decodeURIComponent(req.url.split('?')[0].split('#')[0]));
   if (existsSync(p) && statSync(p).isDirectory()) p = join(p, 'index.html');
@@ -329,6 +329,71 @@ async function sheet(page, file, rows) {
   await page.screenshot({ path: join(outDir, 'basic-open.png'), fullPage: true });
   check('open state remembered', (await page.evaluate(() => localStorage.getItem('hg-adv'))) === '1');
   check('no page errors (basic)', errors.length === 0, errors.join('\n'));
+  await page.close();
+}
+
+// ---- 4. 書き出し（1コマずつ・WebCodecs）: 実際に MP4 を作り、<video> で再生できるか確認
+{
+  const { page, errors } = await openPage({ width: 1280, height: 720 }, '#seed=EXPORT-01');
+  await page.evaluate(() => window.__hg.loadSamples());
+  await page.waitForFunction(() => window.__hg.state.works.length === 6, null, { timeout: 30000 });
+  await page.evaluate(() => { window.__hg.state.works.splice(2); window.__hg.state.film = null; });
+  await page.click('#go');
+  await page.waitForTimeout(300);
+  await page.click('#export');
+  await page.click('#xp-fps button[data-v="30"]');
+  await page.waitForFunction(() => !document.querySelector('#xp-info').textContent.includes('判定中'));
+  const info = await page.textContent('#xp-info');
+  console.log('export info:', info.replace(/\s+/g, ' ').slice(0, 160));
+  check('frame export available', info.includes('1コマずつ'), info);
+  // GPU なし（ソフトウェア描画＋ソフトウェア VP9）だと 1 秒あたり約 2 コマなので、先頭 3 秒だけ書き出す
+  await page.evaluate(() => { window.__hg.xp.limit = 3; });
+  const t0 = Date.now();
+  const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 300000 }), page.click('#xp-start')]);
+  const file = join(outDir, 'export.mp4');
+  await dl.saveAs(file);
+  const secs = ((Date.now() - t0) / 1000).toFixed(1);
+  const size = statSync(file).size;
+  console.log(`exported ${dl.suggestedFilename()} ${(size / 1e6).toFixed(2)}MB in ${secs}s (swiftshader)`);
+  check('mp4 file written', size > 50_000 && dl.suggestedFilename().endsWith('.mp4'));
+  const head = readFileSync(file).subarray(4, 8).toString('latin1');
+  check('mp4 starts with ftyp', head === 'ftyp', head);
+  const v = await page.evaluate(async () => {
+    const blob = window.__hg.state.lastExport.blob;
+    const film = window.__hg.state.film;
+    const video = document.createElement('video');
+    video.muted = true;
+    video.src = URL.createObjectURL(blob);
+    await new Promise((r, j) => { video.onloadedmetadata = r; video.onerror = () => j(new Error('video error ' + (video.error && video.error.message))); });
+    const stats = [];
+    const expDur = Math.min(window.__hg.xp.limit || 1e9, film.duration);
+    for (const ft of [0.2, 0.5, 0.8]) {
+      video.currentTime = expDur * ft;
+      await new Promise((r) => { video.onseeked = r; });
+      const c = document.createElement('canvas'); c.width = 64; c.height = 36;
+      const g = c.getContext('2d'); g.drawImage(video, 0, 0, 64, 36);
+      const d = g.getImageData(0, 0, 64, 36).data;
+      let sum = 0, sum2 = 0;
+      for (let i = 0; i < d.length; i += 4) { const y = (d[i] + d[i + 1] + d[i + 2]) / 3; sum += y; sum2 += y * y; }
+      const n = d.length / 4, m = sum / n;
+      stats.push(Math.sqrt(Math.max(0, sum2 / n - m * m)));
+    }
+    return { w: video.videoWidth, h: video.videoHeight, dur: video.duration, expected: Math.min(window.__hg.xp.limit || 1e9, film.duration), stats };
+  });
+  console.log('playback:', JSON.stringify(v));
+  check('exported video plays at 1920x1080', v.w === 1920 && v.h === 1080);
+  check('exported duration matches film', Math.abs(v.dur - v.expected) < 0.2, `${v.dur} vs ${v.expected}`);
+  check('exported frames have content', v.stats.every((x) => x > 3), JSON.stringify(v.stats));
+  check('renderer restored after export', await page.evaluate(() => window.__hg.renderer.bw < 1920 && !document.body.classList.contains('exporting')));
+  // 中止できること
+  await page.click('#export');
+  await page.waitForFunction(() => !document.querySelector('#xp-info').textContent.includes('判定中'));
+  await page.click('#xp-start');
+  await page.waitForTimeout(1500);
+  await page.click('#xp-close');
+  await page.waitForFunction(() => !window.__hg.xp.running, null, { timeout: 30000 });
+  check('export can be cancelled', await page.evaluate(() => document.querySelector('#xp').hidden && !document.body.classList.contains('exporting')));
+  check('no page errors (export)', errors.length === 0, errors.join('\n'));
   await page.close();
 }
 

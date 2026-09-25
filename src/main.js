@@ -6,6 +6,7 @@ import { buildFilm } from './director.js';
 import { makeSamples } from './samples.js';
 import { randomSeed, createRng } from './rng.js';
 import { initFocalEditor, openFocalEditor } from './focal-editor.js';
+import { pickEncoderConfig, exportFrames } from './export.js';
 
 const $ = (s) => document.querySelector(s);
 const canvas = $('#gl');
@@ -278,7 +279,8 @@ function reroll() {
 
 // ---------------------------------------------------------------- 表示サイズ
 
-function resize(forceFull = false) {
+// fullScale > 0: 画面サイズに関係なく「仮想解像度 × fullScale」で描く（書き出し用。2 で 4K）
+function resize(fullScale = 0) {
   const [W, H] = ASPECTS[state.aspect];
   const vw = window.innerWidth, vh = window.innerHeight;
   const k = Math.min(vw / W, vh / H);
@@ -286,7 +288,7 @@ function resize(forceFull = false) {
   canvas.style.width = cssW + 'px';
   canvas.style.height = cssH + 'px';
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  const s = forceFull ? 1 : Math.min(1, (cssW * dpr) / W);
+  const s = fullScale > 0 ? fullScale : Math.min(1, (cssW * dpr) / W);
   renderer.setSize(W, H, Math.max(2, Math.round(W * s)), Math.max(2, Math.round(H * s)));
   state.dirty = true;
 }
@@ -328,7 +330,7 @@ function frame(now) {
         else { state.t = f.duration; pause(); }
       }
     }
-    if (state.playing || state.dirty) {
+    if ((state.playing || state.dirty) && !state.exporting) {
       const t0 = performance.now();
       f.render(renderer, state.t);
       const js = performance.now() - t0;
@@ -374,7 +376,7 @@ function startRecording() {
   if (!state.film || recorder) return;
   const mime = pickMime();
   if (!mime || !canvas.captureStream) { toast('このブラウザは録画に対応していません'); return; }
-  resize(true); // 仮想解像度そのままで録画
+  resize(1); // 仮想解像度そのままで録画
   state.film.render(renderer, 0);
   const stream = canvas.captureStream(60);
   recChunks = [];
@@ -389,17 +391,95 @@ function startRecording() {
     if (recCancelled) { toast('書き出しを中止しました'); return; }
     const blob = new Blob(recChunks, { type: rec.mimeType });
     const ext = rec.mimeType.includes('mp4') ? 'mp4' : 'webm';
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `hayagawari-${state.seed}.${ext}`;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
-    toast(`書き出し完了（${(blob.size / 1e6).toFixed(1)} MB, ${ext.toUpperCase()}）`);
+    download(blob, ext);
+    toast(`書き出し完了（${(blob.size / 1e6).toFixed(1)} MB, ${ext.toUpperCase()}・リアルタイム録画）`);
   };
   body.classList.add('recording');
   recorder.start(500);
   state.loop = false;
   play(true);
+}
+
+function download(blob, ext) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `hayagawari-${state.seed}.${ext}`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 30_000);
+  state.lastExport = { size: blob.size, type: blob.type, blob };
+}
+
+// ---------------------------------------------------------------- 書き出し（1コマずつ・WebCodecs）
+
+const xp = { res: 1, fps: 60, enc: null, abort: null, running: false, limit: 0 }; // limit: テスト用に書き出す秒数を制限
+
+function exportSize() {
+  const [W, H] = ASPECTS[state.aspect];
+  return [W * xp.res, H * xp.res];
+}
+
+async function refreshExportInfo() {
+  const [w, h] = exportSize();
+  const info = $('#xp-info');
+  info.textContent = '判定中…';
+  xp.enc = await pickEncoderConfig(w, h, xp.fps);
+  const d = state.film.duration;
+  const frames = Math.ceil(d * xp.fps);
+  if (!xp.enc) {
+    info.innerHTML = `このブラウザは1コマずつの書き出しに対応していないため、<b>リアルタイム録画</b>になります（1080p・実時間 ${fmt(d)}・タブを前面にしたまま）。`;
+    return;
+  }
+  const mb = (xp.enc.config.bitrate * d) / 8 / 1e6;
+  let msg = `方式: <b>1コマずつ（${xp.enc.label} / MP4）</b> ・ ${w}×${h} ・ ${xp.fps}fps ・ ${fmt(d)}（${frames} コマ）・ 約 ${mb.toFixed(0)} MB`;
+  if (xp.enc.muxCodec !== 'avc') msg += `<br><span class="warn">このブラウザでは H.264 が使えないため ${xp.enc.label} になります。iPhone の写真アプリや一部の SNS では再生・投稿できないことがあります（Chrome / Edge / Safari なら H.264 で書き出せます）。</span>`;
+  info.innerHTML = msg;
+}
+
+function openExport() {
+  if (!state.film || recorder || xp.running) return;
+  pause();
+  $('#xp').hidden = false;
+  $('#xp-progress').hidden = true;
+  $('#xp-start').disabled = false;
+  $('#xp-close').textContent = '閉じる';
+  refreshExportInfo();
+}
+
+async function startExport() {
+  if (xp.running) return;
+  if (!xp.enc) { $('#xp').hidden = true; startRecording(); return; }
+  xp.running = true;
+  state.exporting = true;
+  xp.abort = new AbortController();
+  $('#xp-start').disabled = true;
+  $('#xp-close').textContent = '中止';
+  $('#xp-progress').hidden = false;
+  body.classList.add('exporting');
+  resize(xp.res);
+  const f = state.film;
+  try {
+    const blob = await exportFrames({
+      canvas, fps: xp.fps, enc: xp.enc, duration: xp.limit > 0 ? Math.min(xp.limit, f.duration) : f.duration, signal: xp.abort.signal,
+      renderAt: (t) => f.render(renderer, t),
+      onProgress: (p, i) => {
+        $('#xp-fill').style.transform = `scaleX(${p})`;
+        $('#xp-status').textContent = `${Math.floor(p * 100)}% ・ ${i.frame} / ${i.total} コマ` + (Number.isFinite(i.eta) ? ` ・ 残り約 ${Math.ceil(i.eta)} 秒` : '');
+      },
+    });
+    download(blob, 'mp4');
+    toast(`書き出し完了（${(blob.size / 1e6).toFixed(1)} MB・${xp.enc.label} / MP4）`);
+    $('#xp').hidden = true;
+  } catch (e) {
+    if (e.name === 'AbortError') toast('書き出しを中止しました');
+    else { console.error(e); toast('書き出しに失敗しました: ' + e.message); }
+    $('#xp').hidden = true;
+  } finally {
+    xp.running = false;
+    state.exporting = false;
+    body.classList.remove('exporting');
+    resize();
+    poke();
+  }
 }
 
 function finishRecording() {
@@ -485,7 +565,18 @@ $('#go').addEventListener('click', () => {
 $('#play').addEventListener('click', () => (state.playing ? pause() : play(false)));
 $('#reroll').addEventListener('click', reroll);
 $('#edit').addEventListener('click', toEditor);
-$('#export').addEventListener('click', startRecording);
+$('#export').addEventListener('click', openExport);
+$('#xp-start').addEventListener('click', startExport);
+$('#xp-close').addEventListener('click', () => { if (xp.running) xp.abort.abort(); else $('#xp').hidden = true; });
+for (const [id, key] of [['#xp-res', 'res'], ['#xp-fps', 'fps']]) {
+  $(id).addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b || xp.running) return;
+    xp[key] = Number(b.dataset.v);
+    $(id).querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
+    refreshExportInfo();
+  });
+}
 $('#rec-cancel').addEventListener('click', () => { recCancelled = true; finishRecording(); });
 $('#fs').addEventListener('click', () => (document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen?.()));
 
@@ -498,12 +589,12 @@ seek.addEventListener('pointerdown', (e) => {
   seek.addEventListener('pointerup', () => seek.removeEventListener('pointermove', move), { once: true });
 });
 
-$('#stage').addEventListener('click', () => { if (body.classList.contains('playing') && !recorder) { state.playing ? pause() : play(false); } });
+$('#stage').addEventListener('click', () => { if (body.classList.contains('playing') && !recorder && !state.exporting && $('#xp').hidden) { state.playing ? pause() : play(false); } });
 window.addEventListener('pointermove', wake);
-window.addEventListener('resize', () => { if (!recorder) resize(); poke(); });
+window.addEventListener('resize', () => { if (!recorder && !state.exporting) resize(); poke(); });
 window.addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT' || !$('#fe').hidden) return;
-  if (!body.classList.contains('playing') || recorder) return;
+  if (!body.classList.contains('playing') || recorder || state.exporting || !$('#xp').hidden) return;
   if (e.code === 'Space') { e.preventDefault(); state.playing ? pause() : play(false); }
   else if (e.key === 'r' || e.key === 'R') reroll();
   else if (e.key === 'ArrowRight') jump(1);
@@ -530,7 +621,7 @@ resize();
 // テスト・デバッグ用フック
 window.__hg = {
   state, renderer, tf,
-  build, play, pause, reroll, toEditor, setAdvOpen,
+  build, play, pause, reroll, toEditor, setAdvOpen, openExport, xp,
   loadSamples: () => addSources(makeSamples('samples').map((s) => ({ src: s.canvas, name: s.name }))),
   renderAt: (t) => { state.film.render(renderer, t); state.t = t; },
   setSeed: (s) => { state.seed = s; $('#seed').value = s; state.film = null; },
