@@ -470,6 +470,57 @@ async function sheet(page, file, rows) {
   await page.close();
 }
 
+// ---- 7. 作業の保存: 読み込み直しても画像・入力・設定・手直しが戻る。「すべて外す」で保存も消える
+{
+  const { page, errors } = await openPage({ width: 1280, height: 800 });
+  await page.evaluate(() => window.__hg.loadSamples());
+  await page.waitForFunction(() => window.__hg.state.works.length === 6, null, { timeout: 30000 });
+  await page.fill('#artist', 'SAVE TEST');
+  await page.evaluate(() => window.__hg.setAdvOpen(true));
+  await page.fill('#works .work:nth-child(2) input.title', 'Renamed Work');
+  await page.click('#pace button[data-v="tight"]');
+  const before = await page.evaluate(() => {
+    const s = window.__hg.state;
+    const w = s.works[0];
+    w.focal = [{ x: 0.2, y: 0.3, size: 0.2, strength: 1, manual: true }]; // 注目点を手で直した想定
+    s.film = null;
+    return { seed: s.seed, names: s.works.map((x) => x.name) };
+  });
+  await page.fill('#subline', 'SUB'); // 入力で保存が走る
+  await page.waitForTimeout(1200);
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.waitForFunction(() => window.__hg.state.works.length === 6, null, { timeout: 60000 });
+  const after = await page.evaluate(() => {
+    const s = window.__hg.state;
+    return {
+      artist: document.querySelector('#artist').value, subline: document.querySelector('#subline').value,
+      seed: s.seed, pace: s.pace, names: s.works.map((x) => x.name), title: s.works[1].title,
+      focal: s.works[0].focal, autoTitle: s.works[1].autoTitle,
+    };
+  });
+  check('restore: images come back in order', JSON.stringify(after.names) === JSON.stringify(before.names), after.names.join(','));
+  check('restore: text fields', after.artist === 'SAVE TEST' && after.subline === 'SUB', `${after.artist}/${after.subline}`);
+  check('restore: seed and advanced settings', after.seed === before.seed && after.pace === 'tight', `${after.seed} ${after.pace}`);
+  check('restore: edited title and manual focal', after.title === 'Renamed Work' && after.autoTitle !== 'Renamed Work' && after.focal.length === 1 && after.focal[0].manual && Math.abs(after.focal[0].x - 0.2) < 1e-6, JSON.stringify([after.title, after.focal]));
+  // 1 枚外すと、その画像も保存から消える
+  await page.click('#works .work:nth-child(1) .x');
+  await page.waitForTimeout(1200);
+  const imgCount = () => page.evaluate(() => new Promise((res) => {
+    const r = indexedDB.open('hayagawari');
+    r.onsuccess = () => { const q = r.result.transaction('img').objectStore('img').count(); q.onsuccess = () => { res(q.result); r.result.close(); }; };
+  }));
+  check('removing a work deletes its stored image', (await imgCount()) === 5);
+  page.once('dialog', (d) => d.accept());
+  await page.click('#clear-works');
+  await page.waitForTimeout(1200);
+  check('clear all deletes stored images', (await imgCount()) === 0 && await page.evaluate(() => window.__hg.state.works.length === 0 && document.querySelector('#works-bar').hidden));
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.waitForTimeout(1500);
+  check('after clear: nothing restored, fields kept', await page.evaluate(() => window.__hg.state.works.length === 0 && document.querySelector('#artist').value === 'SAVE TEST'));
+  check('no page errors (save/restore)', errors.length === 0, errors.join('\n'));
+  await page.close();
+}
+
 // ---- 6. トップ: 作例動画・ロゴ・ボタン
 for (const [name, vp, file] of [['desktop', { width: 1440, height: 900 }, 'hero-16x9'], ['phone', { width: 390, height: 844 }, 'hero-9x16']]) {
   const { page, errors } = await openPage(vp);

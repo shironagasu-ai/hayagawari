@@ -136,6 +136,10 @@
   .work .x { position: absolute; top: 6px; right: 6px; width: 24px; height: 24px; border-radius: 50%; border: none; background: rgba(0,0,0,0.65); font-size: 13px; line-height: 24px; }
   .work .grip { position: absolute; top: 6px; left: 6px; font-size: 11px; padding: 2px 6px; border-radius: 6px; background: rgba(0,0,0,0.65); cursor: grab; font-family: var(--mono); }
   .hint { margin-top: 10px; font-size: 12px; color: var(--sub); }
+  .works-bar { margin-top: 12px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .works-bar[hidden] { display: none; }
+  .works-bar .hint { margin: 0; flex: 1; min-width: 200px; }
+  .works-bar .btn { padding: 6px 14px; font-size: 12px; }
 
   .grid-form { margin-top: 28px; display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 18px 22px; }
   .field label { display: block; font-family: var(--mono); font-size: 11px; letter-spacing: 0.18em; color: var(--sub); margin-bottom: 8px; }
@@ -255,7 +259,7 @@
     <div class="hero-in">
       <div class="kicker">PORTFOLIO MOTION GENERATOR</div>
       <h1 class="logo" id="logo" aria-label="HAYAGAWARI">HAYA<span class="b">GAWARI</span></h1>
-      <p class="lead">イラストを並べるだけで、注目点を解析してキビキビ動くポートフォリオ映像を生成します。シードを変えるたびに別の演出に。画像はブラウザ内で処理され、どこにも送信されません。</p>
+      <p class="lead">イラストを並べるだけで、注目点を解析してキビキビ動くポートフォリオ映像を生成します。シードを変えるたびに別の演出に。画像はブラウザ内で処理・保存され、どこにも送信されません。</p>
       <div class="row hero-cta">
         <button class="btn primary" id="hero-pick">イラストで作る</button>
         <button class="btn" id="hero-sample">サンプルで試す</button>
@@ -276,6 +280,10 @@
     </div>
 
     <div id="works"></div>
+    <div class="works-bar" id="works-bar" hidden>
+      <span class="hint">作業内容はこのブラウザに自動で保存され、次に開いたときに元に戻ります（外部には送信しません）</span>
+      <button class="btn" id="clear-works">すべて外す</button>
+    </div>
     <div class="hint adv-only" id="works-hint" hidden>丸は注目点（番号＝優先順。1番が一番見せたい箇所）。サムネイルをクリックすると注目点を編集できます（赤＝自動検出、緑＝手動）。カードのドラッグで並べ替え。</div>
 
     <div class="grid-form">

@@ -8,6 +8,7 @@ import { randomSeed, createRng } from './rng.js';
 import { initFocalEditor, openFocalEditor } from './focal-editor.js';
 import { pickEncoderConfig, pickAudioConfig, exportFrames } from './export.js';
 import { AudioEngine, buildScore, renderScoreOffline, SOUND_MODES, SOUND_LABELS } from './audio.js';
+import { newKey, putImage, saveSession, loadSession, requestPersist } from './store.js';
 
 const $ = (s) => document.querySelector(s);
 const canvas = $('#gl');
@@ -173,6 +174,8 @@ function renderWorks() {
   $('#works-hint').hidden = n === 0;
   $('#go').disabled = n === 0;
   $('#go-hint').textContent = n === 0 ? 'まずイラストを追加してください' : `${n} 枚 ・ 約 ${estimateDuration()} 秒`;
+  $('#works-bar').hidden = n === 0;
+  scheduleSave();
 }
 
 function estimateDuration() {
@@ -189,15 +192,21 @@ function removeWork(id) {
   renderWorks();
 }
 
-async function addSources(list) {
+// list: [{ src: File|Blob|Canvas, name, key?, title?, focal? }]。key 等は保存から復元するときだけ渡す
+async function addSources(list, { restoring = false } = {}) {
   body.classList.add('busy');
   try {
-    for (const { src, name } of list) {
+    for (const item of list) {
+      const { src, name } = item;
       try {
         const w = await analyzeImage(src, name);
         w.id = nextId++;
         w.autoTitle = w.title;
+        w.key = item.key || newKey();
+        if (item.title) w.title = item.title;
+        if (item.focal && item.focal.length) w.focal = item.focal.map((f) => ({ ...f }));
         state.works.push(w);
+        if (!restoring) storeImage(w.key, src);
       } catch (e) {
         console.warn(e);
         toast(`読み込めませんでした: ${name}`);
@@ -214,6 +223,77 @@ function addFiles(files) {
   const imgs = [...files].filter((f) => f.type.startsWith('image/'));
   if (!imgs.length) return;
   return addSources(imgs.map((f) => ({ src: f, name: f.name })));
+}
+
+// ---------------------------------------------------------------- 作業の保存（IndexedDB・このブラウザ内のみ）
+
+const SAVED_KEYS = ['seed', 'aspect', 'pace', 'style', 'order', 'opener', 'closer'];
+const TEXT_FIELDS = ['artist', 'subline', 'handle'];
+const persist = { ready: false, timer: 0, pending: new Set() };
+
+// 画像は追加したときに 1 回だけ保存（キャンバス＝サンプルは PNG にして保存）
+function storeImage(key, src) {
+  const p = (async () => {
+    const blob = src instanceof Blob ? src : await new Promise((r) => src.toBlob(r, 'image/png'));
+    if (blob) await putImage(key, blob);
+    requestPersist();
+  })().catch((e) => console.warn('保存できませんでした', e)).finally(() => persist.pending.delete(p));
+  persist.pending.add(p);
+}
+
+function scheduleSave() {
+  clearTimeout(persist.timer);
+  persist.timer = setTimeout(saveNow, 400);
+}
+
+async function saveNow() {
+  if (!persist.ready) return; // 復元が終わる前に空の状態で上書きしない
+  await Promise.all([...persist.pending]); // 画像の保存が済んでから一覧を書く
+  const settings = Object.fromEntries(SAVED_KEYS.map((k) => [k, state[k]]));
+  for (const id of TEXT_FIELDS) settings[id] = $('#' + id).value;
+  const works = state.works.map((w) => ({
+    key: w.key, name: w.name, title: w.title,
+    // 手で直した注目点だけ保存（自動のものは読み込み時に解析し直す）
+    focal: JSON.stringify(w.focal) === JSON.stringify(w.autoFocal) ? null : w.focal,
+  }));
+  try { await saveSession({ v: 1, savedAt: Date.now(), settings, works }, () => state.works.map((w) => w.key)); } catch (e) { console.warn('保存できませんでした', e); }
+}
+
+async function restoreSession() {
+  try {
+    const s = await loadSession();
+    if (!s) return;
+    const st = s.settings || {};
+    const h = new URLSearchParams(location.hash.slice(1));
+    for (const id of TEXT_FIELDS) if (typeof st[id] === 'string' && !$('#' + id).value) $('#' + id).value = st[id];
+    // シード・比率・詳細設定は、URL に指定があればそちらを優先（共有された URL の再現）
+    for (const k of SAVED_KEYS) {
+      if (!st[k] || h.get(k)) continue;
+      if (k === 'aspect' && !ASPECTS[st[k]]) continue;
+      state[k] = st[k];
+    }
+    $('#seed').value = state.seed;
+    segSyncs.forEach((f) => f());
+    updateAdvSummary();
+    // 復元待ちの間にユーザーが画像を追加していたら、そちらを優先
+    if (s.works.length && !state.works.length) {
+      await addSources(s.works.map((w) => ({ src: w.blob, name: w.name, key: w.key, title: w.title, focal: w.focal })), { restoring: true });
+      toast(`前回の作業（${state.works.length} 枚）を復元しました`);
+    }
+  } catch (e) {
+    console.warn('保存した作業を読み込めませんでした', e);
+  } finally {
+    persist.ready = true;
+    scheduleSave();
+  }
+}
+
+function clearWorks() {
+  if (!state.works.length || !confirm('追加した画像をすべて外しますか？（このブラウザに保存した画像も消えます）')) return;
+  for (const w of state.works) if (w.tex) renderer.deleteTexture(w.tex);
+  state.works = [];
+  state.film = null;
+  renderWorks();
 }
 
 // ---------------------------------------------------------------- 映像の生成
@@ -248,6 +328,7 @@ function build() {
   $('#i-bpm').textContent = state.film.bpm;
   $('#i-seed').textContent = state.seed;
   writeHash();
+  scheduleSave();
   state.dirty = true;
   return state.film;
 }
@@ -654,6 +735,12 @@ $('#hero-sample').addEventListener('click', async () => {
 });
 setupHero();
 
+// 入力欄・切り替えボタンの変更を保存（作品の追加・削除・並べ替えは renderWorks から）
+$('#editor').addEventListener('input', scheduleSave);
+$('#editor').addEventListener('click', (e) => { if (e.target.closest('button')) scheduleSave(); });
+$('#clear-works').addEventListener('click', clearWorks);
+window.addEventListener('pagehide', saveNow);
+
 // ロゴ: 上下 2 枚に切った文字を重ね、1 字ずつ組み上げる。その後はときどき一瞬ずれる
 function setupLogo() {
   const logo = $('#logo');
@@ -754,6 +841,7 @@ resize();
   setAdvOpen(open);
   updateAdvSummary();
 }
+restoreSession();
 
 // テスト・デバッグ用フック
 window.__hg = {
