@@ -339,7 +339,8 @@ async function sheet(page, file, rows) {
 
 // ---- 4. 書き出し（1コマずつ・WebCodecs）: 実際に MP4 を作り、<video> で再生できるか確認
 {
-  const { page, errors } = await openPage({ width: 1280, height: 720 }, '#seed=EXPORT-01');
+  // adv=1: 詳細設定を開いた状態＝指定のシードを使う（閉じているとシードが毎回ランダムになり結果がぶれる）
+  const { page, errors } = await openPage({ width: 1280, height: 720 }, '#adv=1&seed=EXPORT-01');
   await page.evaluate(() => window.__hg.loadSamples());
   await page.waitForFunction(() => window.__hg.state.works.length === 6, null, { timeout: 30000 });
   await page.evaluate(() => { window.__hg.state.works.splice(2); window.__hg.state.film = null; });

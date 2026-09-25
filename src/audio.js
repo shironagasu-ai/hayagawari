@@ -284,7 +284,8 @@ export function buildScore(film, seed, mode = 'full') {
 
   // ---- 効果音: 着地・カット（flash / shake イベント）
   let lastImpact = -1;
-  for (const ev of film.events) {
+  // 時刻順に処理する（重複判定が時刻順を前提にしているため。film.events は追加順）
+  for (const ev of [...film.events].sort((a, b) => a.t - b.t)) {
     if (ev.kind === 'flash') {
       if (ev.amt >= 0.4) {
         if (ev.t - lastImpact > 0.08) { add(ev.t, 'impact', { gain: Math.min(0.9, 0.45 + ev.amt * 0.5) }, 'sfx'); lastImpact = ev.t; }
