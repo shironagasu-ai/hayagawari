@@ -31,6 +31,8 @@ const check = (name, cond, extra = '') => { console.log(`${cond ? 'PASS' : 'FAIL
 
 async function openPage(viewport, hash = '') {
   const page = await browser.newPage({ viewport });
+  // CI（GPU なし・ソフトウェア描画）は遅いので操作の待ち時間を長めに
+  page.setDefaultTimeout(120000);
   const errors = [];
   page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
   page.on('console', (m) => { if (m.type() === 'error') errors.push('console: ' + m.text()); });
@@ -118,7 +120,7 @@ async function sheet(page, file, rows) {
   let blank = 0;
   for (const t of times) {
     const b = await renderStats(page, t);
-    await page.evaluate((t) => window.__hg.renderAt(t), t);
+    await page.evaluate((t) => { window.__hg.renderAt(t); window.__hg.sync(); }, t);
     if (b.std < 2) blank++;
     if (k % 2 === 0) await page.screenshot({ path: join(outDir, `f169-${String(k).padStart(2, '0')}-${t.toFixed(2)}.png`) });
     k++;
@@ -132,7 +134,7 @@ async function sheet(page, file, rows) {
     const N = 240;
     const t0 = performance.now();
     for (let i = 0; i < N; i++) f.render(r, (i / N) * f.duration);
-    r.gl.finish();
+    window.__hg.sync(); // gl.finish は Chrome では完了を待たないので読み出しで同期
     return (performance.now() - t0) / N;
   });
   console.log('avg frame (incl. swiftshader raster):', cost.toFixed(2), 'ms');
@@ -161,8 +163,8 @@ async function sheet(page, file, rows) {
   for (const th of themes) {
     await page.evaluate((th) => { window.__hg.setOpt('style', th); window.__hg.setSeed('THEME-' + th); window.__hg.build(); }, th);
     const d = await page.evaluate(() => window.__hg.state.film.duration);
-    for (let i = 0; i < 40; i++) await page.evaluate((t) => window.__hg.renderAt(t), (i / 40) * d);
-    await page.evaluate((t) => window.__hg.renderAt(t), d * 0.37);
+    await page.evaluate((d) => { for (let i = 0; i < 40; i++) window.__hg.renderAt((i / 40) * d); window.__hg.sync(); }, d);
+    await page.evaluate((t) => { window.__hg.renderAt(t); window.__hg.sync(); }, d * 0.37);
     await page.screenshot({ path: join(outDir, `theme-${th}.png`) });
   }
   // オープニング / エンディング / 振付を全種描いて確認
@@ -273,7 +275,7 @@ async function sheet(page, file, rows) {
   const segs = await page.evaluate(() => window.__hg.state.film.summary);
   const ts = [2.0, 3.2, segs[1].start + segs[1].dur * 0.6, segs[3].start + segs[3].dur * 0.7, segs[segs.length - 1].start + segs[segs.length - 1].dur * 0.8];
   for (const [i, t] of ts.entries()) {
-    await page.evaluate((t) => window.__hg.renderAt(t), t);
+    await page.evaluate((t) => { window.__hg.renderAt(t); window.__hg.sync(); }, t);
     await page.screenshot({ path: join(outDir, `v916-${i}.png`) });
   }
   check('no page errors (9:16)', errors.length === 0, errors.join('\n'));
@@ -315,6 +317,8 @@ async function sheet(page, file, rows) {
   await page.screenshot({ path: join(outDir, 'basic-closed.png'), fullPage: true });
   // 開くと設定（URL の GLITCH / タイプ）・手動タイトル・注目点・シードが反映される
   await page.click('#adv > summary');
+  // toggle イベントは非同期（ブラウザによって発火が 1 タスク遅れる）
+  await page.waitForFunction(() => window.__hg.state.advOpen);
   check('open shows advanced fields', JSON.stringify(await visible()) === JSON.stringify([true, true, true, true, true, true, true, true]));
   const sumOpen = await page.textContent('#adv-sum');
   check('open summary lists applied settings', sumOpen.includes('GLITCH') && sumOpen.includes('タイプ'), sumOpen);
