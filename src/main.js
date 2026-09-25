@@ -31,7 +31,7 @@ const state = {
   order: 'keep',
   opener: 'auto',
   closer: 'auto',
-  mode: 'simple', // かんたん: 画像・名前・比率だけ。他は「おまかせ」で生成
+  advOpen: false, // 詳細設定アコーディオンの開閉（作品ごとのタイトル・注目点編集もこれに連動）
   film: null,
   t: 0,
   playing: false,
@@ -51,14 +51,19 @@ function readHash() {
   if (['keep', 'shuffle'].includes(h.get('order'))) state.order = h.get('order');
   if (h.get('opener')) state.opener = h.get('opener');
   if (h.get('closer')) state.closer = h.get('closer');
+  return h.get('adv') === '1'; // 詳細設定を開いた状態で作った映像の URL
 }
 function writeHash() {
-  const h = new URLSearchParams({ seed: state.seed, aspect: state.aspect, pace: state.pace, style: state.style, order: state.order, opener: state.opener, closer: state.closer });
+  // 閉じている（おまかせ）ときは詳細設定を URL に載せない。開いているときは再現用に全部載せる
+  const h = new URLSearchParams(state.advOpen
+    ? { adv: '1', seed: state.seed, aspect: state.aspect, pace: state.pace, style: state.style, order: state.order, opener: state.opener, closer: state.closer }
+    : { seed: state.seed, aspect: state.aspect });
   history.replaceState(null, '', '#' + h.toString());
 }
 
 // ---------------------------------------------------------------- 編集 UI
 
+const segSyncs = [];
 function bindSeg(id, key) {
   const el = $(id);
   const sync = () => el.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === state[key]));
@@ -68,8 +73,52 @@ function bindSeg(id, key) {
     state[key] = b.dataset.v;
     sync();
     state.film = null;
+    updateAdvSummary();
   });
+  segSyncs.push(sync);
   sync();
+}
+
+// ---------------------------------------------------------------- 詳細設定（アコーディオン）
+
+const ADV_DEFAULTS = { pace: 'normal', style: 'auto', opener: 'auto', closer: 'auto', order: 'keep' };
+const ADV_NAMES = { pace: 'テンポ', style: 'スタイル', opener: 'オープニング', closer: 'エンディング', order: '並び順' };
+
+// 詳細設定は開いている間だけ反映。閉じている間はすべておまかせ（再生のたびに新しいシード）
+function changedAdv() {
+  return Object.keys(ADV_DEFAULTS).filter((k) => state[k] !== ADV_DEFAULTS[k]);
+}
+
+function updateAdvSummary() {
+  const changed = changedAdv();
+  const el = $('#adv-sum');
+  const list = changed.map((k) => {
+    const btn = document.querySelector(`#${k} button[data-v="${state[k]}"]`);
+    return `${ADV_NAMES[k]} ${btn ? btn.textContent : state[k]}`;
+  }).join('・');
+  if (!state.advOpen) el.textContent = 'オフ ・ すべておまかせ（再生のたびにランダム）';
+  else el.textContent = changed.length ? `反映中: ${list}` : 'オン ・ まだ変更なし';
+  el.classList.toggle('changed', state.advOpen && changed.length > 0);
+  $('#adv-reset').hidden = !state.advOpen || changed.length === 0;
+}
+
+function setAdvOpen(open) {
+  state.advOpen = !!open;
+  const d = $('#adv');
+  if (d.open !== state.advOpen) d.open = state.advOpen;
+  body.classList.toggle('adv-open', state.advOpen);
+  try { localStorage.setItem('hg-adv', state.advOpen ? '1' : '0'); } catch { /* 保存できなくても動作に影響なし */ }
+  state.film = null;
+  updateAdvSummary();
+  renderWorks();
+}
+
+function resetAdv() {
+  Object.assign(state, ADV_DEFAULTS);
+  segSyncs.forEach((f) => f());
+  state.film = null;
+  updateAdvSummary();
+  renderWorks();
 }
 
 function renderWorks() {
@@ -94,7 +143,7 @@ function renderWorks() {
     if (a >= 1) { ptbox.style.top = `${(1 - 1 / a) * 50}%`; ptbox.style.bottom = `${(1 - 1 / a) * 50}%`; }
     else { ptbox.style.left = `${(1 - a) * 50}%`; ptbox.style.right = `${(1 - a) * 50}%`; }
     ptbox.innerHTML = pts;
-    thumb.addEventListener('click', () => { if (state.mode === 'pro') openFocalEditor(w, () => { state.film = null; renderWorks(); }); });
+    thumb.addEventListener('click', () => { if (state.advOpen) openFocalEditor(w, () => { state.film = null; renderWorks(); }); });
     el.querySelector('.x').addEventListener('click', () => removeWork(w.id));
     el.querySelector('input.title').addEventListener('input', (e) => { w.title = e.target.value || 'UNTITLED'; state.film = null; });
     el.addEventListener('dragstart', (e) => { el.classList.add('dragging'); e.dataTransfer.setData('text/x-work', String(w.id)); e.dataTransfer.effectAllowed = 'move'; });
@@ -118,12 +167,11 @@ function renderWorks() {
   const n = state.works.length;
   $('#works-hint').hidden = n === 0;
   $('#go').disabled = n === 0;
-  $('#go').textContent = state.mode === 'simple' ? '▶ 再生' : '▶ 映像を生成して再生';
   $('#go-hint').textContent = n === 0 ? 'まずイラストを追加してください' : `${n} 枚 ・ 約 ${estimateDuration()} 秒`;
 }
 
 function estimateDuration() {
-  const beats = { tight: 6, normal: 8, relaxed: 10 }[effective().pace];
+  const beats = { tight: 6, normal: 8, relaxed: 10 }[effectiveSettings().pace];
   return Math.round((6 + state.works.length * beats + 8) * (60 / 124));
 }
 
@@ -143,6 +191,7 @@ async function addSources(list) {
       try {
         const w = await analyzeImage(src, name);
         w.id = nextId++;
+        w.autoTitle = w.title;
         state.works.push(w);
       } catch (e) {
         console.warn(e);
@@ -164,50 +213,25 @@ function addFiles(files) {
 
 // ---------------------------------------------------------------- 映像の生成
 
-// かんたんモードでは詳細設定を無視して既定値（おまかせ）で作る。詳細設定の値自体は保持する
-function effective() {
-  const pro = state.mode === 'pro';
-  return {
-    pace: pro ? state.pace : 'normal',
-    style: pro ? state.style : 'auto',
-    opener: pro ? state.opener : 'auto',
-    closer: pro ? state.closer : 'auto',
-    order: pro ? state.order : 'keep',
-    subline: pro ? $('#subline').value.trim() : '',
-    handle: pro ? $('#handle').value.trim() : '',
-  };
-}
-
-const MODE_HINT = {
-  simple: '画像・名前・比率だけでOK。演出はすべておまかせ',
-  pro: 'スタイル・テンポ・オープニング/エンディング・シード・注目点まで細かく指定',
-};
-
-function setMode(m) {
-  state.mode = m === 'pro' ? 'pro' : 'simple';
-  body.classList.toggle('simple', state.mode === 'simple');
-  document.querySelectorAll('#mode button').forEach((b) => b.classList.toggle('on', b.dataset.v === state.mode));
-  $('#mode-hint').textContent = MODE_HINT[state.mode];
-  try { localStorage.setItem('hg-mode', state.mode); } catch { /* 保存できなくても動作に影響なし */ }
-  state.film = null;
-  renderWorks();
+// 生成に使う設定。閉じている間は詳細設定・手動のタイトル/注目点を使わず、既定（おまかせ）で作る
+function effectiveSettings() {
+  return state.advOpen ? { ...state } : { ...state, ...ADV_DEFAULTS };
 }
 
 function build() {
   if (!state.works.length) return null;
-  const E = effective();
   tf.dispose();
   for (const w of state.works) if (!w.tex) w.tex = renderer.createTexture(w.source);
   const [W, H] = ASPECTS[state.aspect];
-  let works = state.works;
-  if (E.order === 'shuffle') works = createRng('order|' + state.seed).shuffle(works);
+  const S = effectiveSettings();
+  let works = state.advOpen ? state.works : state.works.map((w) => ({ ...w, title: w.autoTitle, focal: w.autoFocal.map((f) => ({ ...f })) }));
+  if (S.order === 'shuffle') works = createRng('order|' + state.seed).shuffle(works);
   const t0 = performance.now();
   state.film = buildFilm({
-    works, seed: state.seed, W, H, tf, pace: E.pace,
-    theme: E.style === 'auto' ? null : E.style,
-    opener: E.opener === 'auto' ? null : E.opener,
-    closer: E.closer === 'auto' ? null : E.closer,
-    artist: $('#artist').value.trim(), subline: E.subline, handle: E.handle,
+    works, seed: state.seed, W, H, tf, pace: S.pace,
+    theme: S.style === 'auto' ? null : S.style,
+    opener: S.opener === 'auto' ? null : S.opener,
+    closer: S.closer === 'auto' ? null : S.closer,
     variant: state.variant || null,
     artist: $('#artist').value.trim(), subline: $('#subline').value.trim(), handle: $('#handle').value.trim(),
   });
@@ -421,7 +445,7 @@ function jump(dir) {
 
 // ---------------------------------------------------------------- イベント
 
-readHash();
+const hashAdv = readHash();
 $('#seed').value = state.seed;
 bindSeg('#aspect', 'aspect');
 bindSeg('#pace', 'pace');
@@ -430,7 +454,8 @@ bindSeg('#order', 'order');
 bindSeg('#opener', 'opener');
 bindSeg('#closer', 'closer');
 initFocalEditor();
-$('#mode').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) setMode(b.dataset.v); });
+$('#adv').addEventListener('toggle', () => { if ($('#adv').open !== state.advOpen) setAdvOpen($('#adv').open); });
+$('#adv-reset').addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); resetAdv(); }); // summary 内なので開閉させない
 $('#pace').addEventListener('click', renderWorks);
 for (const id of ['#artist', '#subline', '#handle']) $(id).addEventListener('input', () => { state.film = null; });
 $('#seed').addEventListener('input', (e) => { state.seed = e.target.value.trim().toUpperCase() || randomSeed(); state.film = null; });
@@ -452,7 +477,11 @@ window.addEventListener('drop', (e) => {
   if (state.playing) toEditor();
 });
 
-$('#go').addEventListener('click', () => { build(); play(true); wake(); });
+$('#go').addEventListener('click', () => {
+  // 閉じている（おまかせ）ときは押すたびに新しいシード＝毎回違う映像
+  if (!state.advOpen) { state.seed = randomSeed(); $('#seed').value = state.seed; }
+  build(); play(true); wake();
+});
 $('#play').addEventListener('click', () => (state.playing ? pause() : play(false)));
 $('#reroll').addEventListener('click', reroll);
 $('#edit').addEventListener('click', toEditor);
@@ -488,17 +517,22 @@ document.addEventListener('visibilitychange', () => { if (document.hidden && rec
 
 resize();
 {
-  let m = 'simple';
-  try { m = localStorage.getItem('hg-mode') || 'simple'; } catch { /* プライベートモード等 */ }
-  setMode(new URLSearchParams(location.hash.slice(1)).get('mode') || m);
+  let open = false;
+  try {
+    const v = localStorage.getItem('hg-adv');
+    open = v !== null ? v === '1' : localStorage.getItem('hg-mode') === 'pro'; // 旧「こだわり」設定からの引き継ぎ
+  } catch { /* プライベートモード等 */ }
+  if (hashAdv) open = true; // 詳細設定つきで共有された URL は、その設定で再現する
+  setAdvOpen(open);
+  updateAdvSummary();
 }
 
 // テスト・デバッグ用フック
 window.__hg = {
   state, renderer,
-  build, play, pause, reroll, toEditor, setMode,
+  build, play, pause, reroll, toEditor, setAdvOpen,
   loadSamples: () => addSources(makeSamples('samples').map((s) => ({ src: s.canvas, name: s.name }))),
   renderAt: (t) => { state.film.render(renderer, t); state.t = t; },
   setSeed: (s) => { state.seed = s; $('#seed').value = s; state.film = null; },
-  setOpt: (k, v) => { state[k] = v; state.film = null; },
+  setOpt: (k, v) => { state[k] = v; state.film = null; segSyncs.forEach((f) => f()); updateAdvSummary(); },
 };
