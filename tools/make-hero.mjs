@@ -1,6 +1,6 @@
 // トップページ背景のループ動画を作る。リポジトリルートで:
 //   FFMPEG=/path/to/ffmpeg node tools/make-hero.mjs [--images DIR] [--name NAME] [--sub SUBTITLE] [--seed SEED] [--style MIX]
-// --images を省略すると内蔵サンプルで作る。画像はファイル名順に並ぶ（先頭の「1 」などの番号はタイトルから除く）。出力: assets/hero/hero-16x9.mp4, hero-9x16.mp4 と各ポスター画像（.jpg）
+// --crf で画質（既定 30。小さいほど高画質・大きいファイル）。--images を省略すると内蔵サンプルで作る。画像はファイル名順に並ぶ（先頭の「1 」などの番号はタイトルから除く）。出力: assets/hero/hero-16x9.mp4, hero-9x16.mp4 と各ポスター画像（.jpg）
 //
 // HAYAGAWARI 自身の描画を 1 コマずつ JPEG で取り出し、ffmpeg で H.264（音声なし）に変換する。
 // H.264 にするのは iPhone の Safari を含めて背景で自動再生できるようにするため（VP9 は iOS で再生できないことがある）。
@@ -79,7 +79,7 @@ for (const job of JOBS) {
   const ff = spawn(FFMPEG, [
     '-y', '-loglevel', 'error', '-f', 'image2pipe', '-framerate', String(FPS), '-c:v', 'mjpeg', '-i', '-',
     '-vf', `fade=t=out:st=${(info.d - 0.4).toFixed(2)}:d=0.4`,
-    '-c:v', 'libx264', '-preset', 'slow', '-crf', '27', '-profile:v', 'high', '-pix_fmt', 'yuv420p',
+    '-c:v', 'libx264', '-preset', 'slow', '-crf', String(args.crf || 30), '-profile:v', 'high', '-pix_fmt', 'yuv420p',
     '-movflags', '+faststart', '-an', join(outDir, `${job.file}.mp4`),
   ], { stdio: ['pipe', 'inherit', 'inherit'] });
   const done = new Promise((r, j) => ff.on('close', (c) => (c === 0 ? r() : j(new Error(`ffmpeg exited ${c}`)))));
