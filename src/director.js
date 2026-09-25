@@ -56,7 +56,38 @@ export const THEMES = {
     trans: { glitch: 4, whip: 2, slices: 3, zoom: 2, cut: 3, spin: 2, door: 1 },
     decor: { grid: 3, marquee: 2, number: 2, blur: 2, dots: 1 },
   },
+  MONO: {
+    label: 'MONO', bg: 'mono', font: 'sans', weight: 900, tracking: -0.02, upper: true,
+    grain: 0.06, vignette: 0.3, hud: true, bpm: [120, 132], mono: true,
+    variants: { focus: 3, cuts: 3, spotlight: 3, lockon: 2, pan: 2, split: 2, triptych: 1, mosaic: 1, card: 1 },
+    trans: { cut: 3, whip: 3, bars: 2, slices: 2, door: 2, zoom: 1 },
+    decor: { number: 3, grid: 2, marquee: 2, stripes: 1 },
+  },
+  NEON: {
+    label: 'NEON', bg: 'neon', font: 'condensed', weight: 900, tracking: 0.04, upper: true,
+    grain: 0.04, vignette: 0.55, hud: true, bpm: [128, 140], aberrBase: 1.2,
+    variants: { lockon: 3, focus: 3, cuts: 3, spotlight: 2, mosaic: 2, pan: 1, split: 1, triptych: 1, card: 1 },
+    trans: { zoom: 3, spin: 3, glitch: 2, whip: 2, iris: 1, slices: 1 },
+    decor: { grid: 3, marquee: 3, dots: 1, number: 1, blur: 2 },
+  },
+  PASTEL: {
+    label: 'PASTEL', bg: 'pastel', font: 'sans', weight: 700, tracking: 0.02, upper: false,
+    grain: 0.02, vignette: 0.0, hud: true, bpm: [104, 116],
+    variants: { card: 3, triptych: 3, mosaic: 2, spotlight: 2, focus: 2, split: 1, pan: 1, cuts: 1, lockon: 1 },
+    trans: { iris: 3, door: 2, whip: 2, slices: 2, zoom: 1, cut: 1 },
+    decor: { dots: 3, stripes: 2, number: 2, blur: 1 },
+  },
+  RETRO: {
+    label: 'RETRO', bg: 'paper', font: 'serif', weight: 800, tracking: 0.01, upper: true,
+    grain: 0.1, vignette: 0.5, hud: true, bpm: [110, 122],
+    variants: { card: 3, split: 3, pan: 2, focus: 2, triptych: 2, cuts: 1, mosaic: 1, spotlight: 1, lockon: 1 },
+    trans: { slices: 3, door: 3, bars: 2, whip: 2, cut: 2, iris: 1 },
+    decor: { number: 3, stripes: 2, grid: 1, marquee: 1 },
+  },
 };
+
+// MIX: 作品ごとにスタイルを抽選する（オープニング/エンディング/HUD/BPM はベースのスタイル）
+export const STYLE_KEYS = () => Object.keys(THEMES);
 
 const PACE = {
   tight: { beats: 6, bpm: 6 },
@@ -687,8 +718,18 @@ export function buildFilm(opts) {
   const { works, seed, W, H, tf, pace = 'normal', artist = '', subline = '', handle = '' } = opts;
   const year = opts.year || new Date().getFullYear();
   const rng = createRng(`${seed}|${works.length}|${W}x${H}|${pace}`);
-  const themeName = opts.theme && THEMES[opts.theme] ? opts.theme : rng.pick(Object.keys(THEMES));
-  const theme = THEMES[themeName];
+  const mixMode = opts.theme === 'MIX';
+  const baseName = !mixMode && opts.theme && THEMES[opts.theme] ? opts.theme : rng.pick(Object.keys(THEMES));
+  const themeName = mixMode ? 'MIX' : baseName;
+  const theme = THEMES[baseName]; // オープニング/エンディング/HUD/BPM のスタイル
+  // 作品ごとのスタイル。MIX では1枚ずつ抽選（直前と同じものは避ける）
+  const workThemeNames = [];
+  for (let i = 0; i < works.length; i++) {
+    if (!mixMode) { workThemeNames.push(baseName); continue; }
+    const keys = Object.keys(THEMES).filter((k) => k !== workThemeNames[i - 1]);
+    workThemeNames.push(rng.pick(keys));
+  }
+  const workThemes = workThemeNames.map((k) => THEMES[k]);
   const P = PACE[pace] || PACE.normal;
   const bpm = Math.round(rng.range(theme.bpm[0], theme.bpm[1]) + P.bpm);
   const beat = 60 / bpm;
@@ -697,7 +738,7 @@ export function buildFilm(opts) {
   const segments = [];
   const up = (s) => (theme.upper ? s.toUpperCase() : s);
 
-  const workColors = works.map((w) => colorsFor(w, theme));
+  const workColors = works.map((w, i) => colorsFor(w, workThemes[i]));
   const globalCol = workColors[0] || colorsFor({ roles: { dominant: [0.1, 0.1, 0.1], accent: [1, 0.3, 0.3] } }, theme);
 
   // ---- トランジション列（境界ごと）
@@ -705,7 +746,9 @@ export function buildFilm(opts) {
   const transitions = [];
   let prevType = null;
   for (let i = 0; i < nBound; i++) {
-    let type = rng.weighted(theme.trans, prevType ? [prevType] : []);
+    // 境界 i は「直前のセグメント」のスタイルの重みで抽選（0 はオープニング＝ベース）
+    const trTheme = i === 0 ? theme : workThemes[i - 1];
+    let type = rng.weighted(trTheme.trans, prevType ? [prevType] : []);
     if (i === nBound - 1 && type === 'glitch') type = 'bars';
     const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
     const d = rng.chance(0.7) ? dirs[rng.int(0, 1)] : dirs[rng.int(2, 3)];
@@ -729,7 +772,7 @@ export function buildFilm(opts) {
   {
     const start = cursor;
     const O = OPENERS[openerKey]({ ...C, ev: (t, kind, amt, dur, color) => addEvent(start + t, kind, amt, dur, color) });
-    segments.push({ kind: 'opener', variant: openerKey, start, dur: O.dur, col: globalCol, outT: transitions[0], draw: O.draw });
+    segments.push({ kind: 'opener', variant: openerKey, theme: baseName, start, dur: O.dur, col: globalCol, outT: transitions[0], draw: O.draw });
     cursor += O.dur;
   }
 
@@ -741,22 +784,23 @@ export function buildFilm(opts) {
     const start = cursor;
     const srng = rng.fork('work' + idx);
     // opts.variant はテスト・デバッグ用（全作品を指定の振付に固定）
-    const vkey = VARIANTS[opts.variant] ? (srng.next(), opts.variant) : srng.weighted(theme.variants, varKeys.slice(-1));
+    const wtheme = workThemes[idx];
+    const vkey = VARIANTS[opts.variant] ? (srng.next(), opts.variant) : srng.weighted(wtheme.variants, varKeys.slice(-1));
     varKeys.push(vkey);
     const side = srng.pick(['left', 'right']);
     const layout = layoutFor(work, W, H, idx % 2 ? (side === 'left' ? 'right' : 'left') : side);
     const S = {
-      work, idx, total: works.length, artist, year, W, H, beat, D, rng: srng, tf, theme, minDim, layout,
+      work, idx, total: works.length, artist, year, W, H, beat, D, rng: srng, tf, theme: wtheme, minDim, layout,
       points: pointsFor(work, 3, srng),
       event: (t, kind, amt, dur, color) => addEvent(start + t, kind, amt, dur, color),
     };
-    const dkeys = [srng.weighted(theme.decor, decorKeys.slice(-1))];
-    if (srng.chance(0.35)) dkeys.push(srng.weighted(theme.decor, dkeys));
+    const dkeys = [srng.weighted(wtheme.decor, decorKeys.slice(-1))];
+    if (srng.chance(0.35)) dkeys.push(srng.weighted(wtheme.decor, dkeys));
     decorKeys.push(dkeys[0]);
     const decors = dkeys.map((k) => DECORS[k](S));
     const body = VARIANTS[vkey](S);
     segments.push({
-      kind: 'work', idx, variant: vkey, decor: dkeys, start, dur: D, col: workColors[idx], work, layout,
+      kind: 'work', idx, variant: vkey, decor: dkeys, theme: workThemeNames[idx], start, dur: D, col: workColors[idx], work, layout,
       inT: transitions[idx], outT: transitions[idx + 1],
       draw(r, t, col, hint) {
         for (const d of decors) d(r, t, D, col);
@@ -770,7 +814,7 @@ export function buildFilm(opts) {
   {
     const start = cursor;
     const E = CLOSERS[closerKey]({ ...C, ev: (t, kind, amt, dur, color) => addEvent(start + t, kind, amt, dur, color) });
-    segments.push({ kind: 'closer', variant: closerKey, start, dur: E.dur, col: globalCol, inT: transitions[nBound - 1], outT: { type: 'cut' }, draw: E.draw });
+    segments.push({ kind: 'closer', variant: closerKey, theme: baseName, start, dur: E.dur, col: globalCol, inT: transitions[nBound - 1], outT: { type: 'cut' }, draw: E.draw });
     cursor += E.dur;
   }
 
@@ -809,15 +853,18 @@ export function buildFilm(opts) {
   // ---- 描画
   const fx = { aberr: 0, grain: theme.grain, vignette: theme.vignette, flash: [1, 1, 1, 0], shakeX: 0, shakeY: 0 };
   const hint = {};
-  const HUD = makeHud({ tf, theme, W, H, minDim, works, artist, year, up });
+  const HUD = makeHud({ tf, theme, W, H, minDim, works, artist, subline, year, up });
 
   function segmentAt(t) {
     for (let i = segments.length - 1; i >= 0; i--) if (t >= segments[i].start) return i;
     return 0;
   }
 
-  function evalFx(t) {
-    fx.aberr = theme.aberrBase || 0;
+  function evalFx(t, seg) {
+    // グレイン等の質感は、いま映っているセグメントのスタイルに従う（MIX で作品ごとに変わる）
+    const th = THEMES[seg.theme] || theme;
+    fx.grain = th.grain; fx.vignette = th.vignette;
+    fx.aberr = th.aberrBase || 0;
     fx.flash[3] = 0;
     fx.shakeX = 0; fx.shakeY = 0;
     for (const ev of events) {
@@ -886,14 +933,14 @@ export function buildFilm(opts) {
     if (showsGap(seg.outT) && lt >= outStart) bgCol = seg.outT.color;
 
     if (theme.hud) HUD(r, t, seg, i, lt, col);
-    r.present(evalFx(t), bgCol, t);
+    r.present(evalFx(t, seg), bgCol, t);
   }
 
   function dispose() { /* テキストは TextFactory 側で一括破棄 */ }
 
   return {
-    duration, bpm, beat, theme: themeName, opener: openerKey, closer: closerKey, segments, events, render, dispose,
-    summary: segments.map((s) => ({ kind: s.kind, start: s.start, dur: s.dur, variant: s.variant, decor: s.decor, out: s.outT && s.outT.type })),
+    duration, bpm, beat, theme: themeName, baseTheme: baseName, workThemes: workThemeNames, opener: openerKey, closer: closerKey, segments, events, render, dispose,
+    summary: segments.map((s) => ({ kind: s.kind, theme: s.theme, start: s.start, dur: s.dur, variant: s.variant, decor: s.decor, out: s.outT && s.outT.type })),
   };
 }
 
@@ -919,11 +966,12 @@ function drawBars(r, tr, lt, W, H, colA, colB) {
 }
 
 // 常駐 HUD: 作家名・通し番号・進行ティック
-function makeHud({ tf, theme, W, H, minDim, works, artist, year, up }) {
+function makeHud({ tf, theme, W, H, minDim, works, artist, subline, year, up }) {
   const m = minDim * 0.045;
   const fs = Math.round(minDim * 0.016);
   const A = tf.get(up(artist || 'PORTFOLIO'), { family: 'mono', size: fs, weight: 700, tracking: 0.25 });
-  const R = tf.get(`PORTFOLIO — ${year}`, { family: 'mono', size: fs, weight: 500, tracking: 0.25 });
+  // 右上: サブタイトルがあれば「サブタイトル — 年」、なければ年だけ
+  const R = tf.get(subline ? `${up(subline)} — ${year}` : String(year), { family: 'mono', size: fs, weight: 500, tracking: 0.25 });
   const nums = works.map((_, i) => tf.get(pad2(i + 1), { family: 'mono', size: Math.round(minDim * 0.03), weight: 700, tracking: 0.05 }));
   const TOT = tf.get(`/ ${pad2(works.length)}`, { family: 'mono', size: fs, weight: 500, tracking: 0.2 });
   const n = works.length;

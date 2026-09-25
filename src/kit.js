@@ -27,14 +27,34 @@ export function colorsFor(work, theme) {
   } else if (theme.bg === 'light') {
     bg = hsl(dh, Math.min(ds, 0.3) * 0.5, 0.925);
     ink = hsl(ah, 0.25, 0.09);
+  } else if (theme.bg === 'mono') {
+    // MONO: 無彩色の背景と文字。アクセントだけ固定の赤
+    bg = [0.055, 0.055, 0.06];
+    ink = [0.96, 0.96, 0.96];
+    accent = [0.94, 0.2, 0.18];
+  } else if (theme.bg === 'neon') {
+    // NEON: ほぼ黒の背景に、作品の色相を最大彩度で光らせる
+    bg = hsl(ah, 0.5, 0.035);
+    ink = hsl(ah, 0.35, 0.95);
+    accent = hsl(ah, 1, 0.6);
+  } else if (theme.bg === 'pastel') {
+    // PASTEL: 作品の色相を淡くした背景、アクセントは同系色の中明度
+    bg = hsl(ah, 0.55, 0.89);
+    ink = hsl(ah, 0.3, 0.18);
+    accent = hsl(ah, 0.6, 0.62);
+  } else if (theme.bg === 'paper') {
+    // RETRO: 生成り紙の背景、墨色の文字、くすんだアクセント
+    bg = [0.93, 0.9, 0.82];
+    ink = [0.16, 0.13, 0.11];
+    accent = hsl(ah, 0.45, 0.42);
   } else {
     bg = hsl(ah, 0.72, 0.52);
     ink = lum(bg) > 0.5 ? hsl(ah, 0.4, 0.08) : [0.98, 0.97, 0.95];
     // POP: アクセントは補色寄り
     accent = hsl((ah + 0.5) % 1, 0.8, lum(bg) > 0.5 ? 0.35 : 0.6);
   }
-  // アクセントが背景に沈む場合は明度をずらす
-  if (Math.abs(lum(accent) - lum(bg)) < 0.22) {
+  // アクセントが背景に沈む場合は明度をずらす（MONO は固定色なので対象外）
+  if (theme.bg !== 'mono' && Math.abs(lum(accent) - lum(bg)) < 0.22) {
     const [h, s, l] = rgbToHsl(accent.map((v) => v * 255));
     accent = hsl(h, s, lum(bg) > 0.5 ? Math.max(0.2, l - 0.3) : Math.min(0.8, l + 0.3));
   }
@@ -130,6 +150,7 @@ export function panelZoom(work, f, winW, winH, mul = 1) {
 // ---------------------------------------------------------------- 文字
 
 export function drawText(r, T, x, y, o = {}) {
+  if (!T) return; // 未入力の文字列（サブタイトル等）は描かない
   // (x,y) はグリフ枠の左上（右揃えなら右上）。テクスチャの余白を差し引いて配置
   const s = o.scale ?? 1;
   const gw = (T.w - 2 * T.pad) * s;

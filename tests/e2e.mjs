@@ -167,16 +167,44 @@ async function sheet(page, file, rows) {
   }
   // オープニング / エンディング / 振付を全種描いて確認
   const T = [0.08, 0.2, 0.35, 0.5, 0.65, 0.8, 0.95];
-  const opKeys = ['montage', 'type', 'shutter', 'countdown', 'knockout'];
-  const clKeys = ['grid', 'filmstrip', 'stack', 'knockout'];
+  const opKeys = ['montage', 'type', 'shutter', 'countdown', 'knockout', 'slice', 'tunnel', 'boot'];
+  const clKeys = ['grid', 'filmstrip', 'stack', 'knockout', 'orbit', 'curtain', 'rewind'];
   const vKeys = await page.evaluate(async () => (await import('/src/director.js')).VARIANT_KEYS());
   await page.evaluate(() => { window.__hg.setOpt('style', 'NOIR'); window.__hg.setSeed('COVER-01'); });
   await sheet(page, 'sheet-openers.png', opKeys.map((k) => ({ key: 'opener', value: k, seg: 0, times: T })));
   await sheet(page, 'sheet-closers.png', clKeys.map((k) => ({ key: 'closer', value: k, seg: 'last', times: T })));
   await sheet(page, 'sheet-variants.png', vKeys.map((k) => ({ key: 'variant', value: k, seg: 1, times: T })));
   const picked = await page.evaluate(() => { const f = window.__hg.state.film; return [f.opener, f.closer, f.segments[1].variant]; });
-  check('opener/closer/variant overrides applied', picked[0] === 'knockout' && picked[1] === 'knockout' && picked[2] === vKeys[vKeys.length - 1], picked.join(','));
+  check('opener/closer/variant overrides applied', picked[0] === opKeys[opKeys.length - 1] && picked[1] === clKeys[clKeys.length - 1] && picked[2] === vKeys[vKeys.length - 1], picked.join(','));
   check('9 choreographies available', vKeys.length >= 9, vKeys.join(','));
+
+  // スタイル: 全9種とミックス（作品ごとに抽選・連続しない）
+  const styleKeys = await page.evaluate(async () => (await import('/src/director.js')).STYLE_KEYS());
+  check('9 styles', styleKeys.length === 9, styleKeys.join(','));
+  await page.evaluate(() => window.__hg.setOpt('opener', 'auto'));
+  await sheet(page, 'sheet-styles.png', styleKeys.map((k) => ({ key: 'style', value: k, seg: 1, times: [0.15, 0.45, 0.75, 0.95] })));
+  const mix = await page.evaluate(() => {
+    window.__hg.setOpt('style', 'MIX'); window.__hg.setSeed('MIX-01'); window.__hg.build();
+    const f = window.__hg.state.film;
+    return { theme: f.theme, base: f.baseTheme, works: f.workThemes, segThemes: f.summary.map((s) => s.theme) };
+  });
+  console.log('mix:', JSON.stringify(mix));
+  check('MIX picks per-work styles', mix.theme === 'MIX' && new Set(mix.works).size >= 3 && mix.works.every((w, i) => i === 0 || w !== mix.works[i - 1]));
+  check('MIX opener/closer use base style', mix.segThemes[0] === mix.base && mix.segThemes[mix.segThemes.length - 1] === mix.base);
+  await sheet(page, 'sheet-mix.png', [1, 2, 3, 4, 5, 6].map((i) => ({ key: 'style', value: 'MIX', seg: i, times: [0.3, 0.6, 0.9] })));
+  // サブタイトル未入力なら PORTFOLIO 等を自動で入れない
+  const autoSub = await page.evaluate(() => {
+    document.querySelector('#artist').value = 'SOMEONE'; document.querySelector('#subline').value = '';
+    const bad = [];
+    for (const op of ['montage', 'type', 'shutter', 'countdown', 'knockout', 'slice', 'tunnel', 'boot']) {
+      window.__hg.setOpt('opener', op); window.__hg.setOpt('style', 'NOIR'); window.__hg.build();
+      for (const k of window.__hg.tf.cache.keys()) if (/PORTFOLIO|SELECTED WORKS/.test(k.split('|')[0])) bad.push(op + ':' + k.split('|')[0]);
+    }
+    window.__hg.setOpt('opener', 'auto'); document.querySelector('#artist').value = '';
+    return bad;
+  });
+  check('no auto subtitle when blank', autoSub.length === 0, autoSub.join(','));
+
   // 自動選択に戻したとき、シードで全パターンが出うる
   const seen = await page.evaluate(() => {
     window.__hg.setOpt('opener', 'auto'); window.__hg.setOpt('closer', 'auto'); window.__hg.setOpt('variant', null);
@@ -190,7 +218,7 @@ async function sheet(page, file, rows) {
     return { o: o.size, c: c.size, v: v.size, tr: [...tr].sort().join(',') };
   });
   console.log('auto coverage:', JSON.stringify(seen));
-  check('auto picks all openers/closers', seen.o === 5 && seen.c === 4);
+  check('auto picks all openers/closers', seen.o === opKeys.length && seen.c === clKeys.length, `${seen.o}/${seen.c}`);
   check('auto uses new transitions', seen.tr.includes('spin') && seen.tr.includes('door'));
 
   // 注目点エディタ: 開く → ドラッグ移動 → 追加 → 1番にする → 削除 → 自動に戻す

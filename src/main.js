@@ -529,7 +529,7 @@ resize();
 
 // テスト・デバッグ用フック
 window.__hg = {
-  state, renderer,
+  state, renderer, tf,
   build, play, pause, reroll, toEditor, setAdvOpen,
   loadSamples: () => addSources(makeSamples('samples').map((s) => ({ src: s.canvas, name: s.name }))),
   renderAt: (t) => { state.film.render(renderer, t); state.t = t; },
