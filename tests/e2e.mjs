@@ -31,6 +31,8 @@ const check = (name, cond, extra = '') => { console.log(`${cond ? 'PASS' : 'FAIL
 
 async function openPage(viewport, hash = '') {
   const page = await browser.newPage({ viewport });
+  // CI（GPU なし・ソフトウェア描画）は遅いので操作の待ち時間を長めに
+  page.setDefaultTimeout(120000);
   const errors = [];
   page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
   page.on('console', (m) => { if (m.type() === 'error') errors.push('console: ' + m.text()); });
@@ -118,7 +120,7 @@ async function sheet(page, file, rows) {
   let blank = 0;
   for (const t of times) {
     const b = await renderStats(page, t);
-    await page.evaluate((t) => window.__hg.renderAt(t), t);
+    await page.evaluate((t) => { window.__hg.renderAt(t); window.__hg.sync(); }, t);
     if (b.std < 2) blank++;
     if (k % 2 === 0) await page.screenshot({ path: join(outDir, `f169-${String(k).padStart(2, '0')}-${t.toFixed(2)}.png`) });
     k++;
@@ -132,7 +134,7 @@ async function sheet(page, file, rows) {
     const N = 240;
     const t0 = performance.now();
     for (let i = 0; i < N; i++) f.render(r, (i / N) * f.duration);
-    r.gl.finish();
+    window.__hg.sync(); // gl.finish は Chrome では完了を待たないので読み出しで同期
     return (performance.now() - t0) / N;
   });
   console.log('avg frame (incl. swiftshader raster):', cost.toFixed(2), 'ms');
@@ -161,8 +163,8 @@ async function sheet(page, file, rows) {
   for (const th of themes) {
     await page.evaluate((th) => { window.__hg.setOpt('style', th); window.__hg.setSeed('THEME-' + th); window.__hg.build(); }, th);
     const d = await page.evaluate(() => window.__hg.state.film.duration);
-    for (let i = 0; i < 40; i++) await page.evaluate((t) => window.__hg.renderAt(t), (i / 40) * d);
-    await page.evaluate((t) => window.__hg.renderAt(t), d * 0.37);
+    await page.evaluate((d) => { for (let i = 0; i < 40; i++) window.__hg.renderAt((i / 40) * d); window.__hg.sync(); }, d);
+    await page.evaluate((t) => { window.__hg.renderAt(t); window.__hg.sync(); }, d * 0.37);
     await page.screenshot({ path: join(outDir, `theme-${th}.png`) });
   }
   // オープニング / エンディング / 振付を全種描いて確認
@@ -273,7 +275,7 @@ async function sheet(page, file, rows) {
   const segs = await page.evaluate(() => window.__hg.state.film.summary);
   const ts = [2.0, 3.2, segs[1].start + segs[1].dur * 0.6, segs[3].start + segs[3].dur * 0.7, segs[segs.length - 1].start + segs[segs.length - 1].dur * 0.8];
   for (const [i, t] of ts.entries()) {
-    await page.evaluate((t) => window.__hg.renderAt(t), t);
+    await page.evaluate((t) => { window.__hg.renderAt(t); window.__hg.sync(); }, t);
     await page.screenshot({ path: join(outDir, `v916-${i}.png`) });
   }
   check('no page errors (9:16)', errors.length === 0, errors.join('\n'));
@@ -315,6 +317,8 @@ async function sheet(page, file, rows) {
   await page.screenshot({ path: join(outDir, 'basic-closed.png'), fullPage: true });
   // 開くと設定（URL の GLITCH / タイプ）・手動タイトル・注目点・シードが反映される
   await page.click('#adv > summary');
+  // toggle イベントは非同期（ブラウザによって発火が 1 タスク遅れる）
+  await page.waitForFunction(() => window.__hg.state.advOpen);
   check('open shows advanced fields', JSON.stringify(await visible()) === JSON.stringify([true, true, true, true, true, true, true, true]));
   const sumOpen = await page.textContent('#adv-sum');
   check('open summary lists applied settings', sumOpen.includes('GLITCH') && sumOpen.includes('タイプ'), sumOpen);
@@ -335,7 +339,8 @@ async function sheet(page, file, rows) {
 
 // ---- 4. 書き出し（1コマずつ・WebCodecs）: 実際に MP4 を作り、<video> で再生できるか確認
 {
-  const { page, errors } = await openPage({ width: 1280, height: 720 }, '#seed=EXPORT-01');
+  // adv=1: 詳細設定を開いた状態＝指定のシードを使う（閉じているとシードが毎回ランダムになり結果がぶれる）
+  const { page, errors } = await openPage({ width: 1280, height: 720 }, '#adv=1&seed=EXPORT-01');
   await page.evaluate(() => window.__hg.loadSamples());
   await page.waitForFunction(() => window.__hg.state.works.length === 6, null, { timeout: 30000 });
   await page.evaluate(() => { window.__hg.state.works.splice(2); window.__hg.state.film = null; });
@@ -348,6 +353,10 @@ async function sheet(page, file, rows) {
   console.log('export info:', info.replace(/\s+/g, ' ').slice(0, 160));
   check('frame export available', info.includes('1コマずつ'), info);
   check('export includes audio by default', /音声: .*(AAC|Opus)/.test(info), info);
+  const vcodec = (info.match(/1コマずつ（(\S+) \/ MP4）/) || [])[1], acodec = (info.match(/音声: [^（]*（(\S+)）/) || [])[1];
+  console.log(`codecs: video=${vcodec} audio=${acodec}`);
+  // CI の Google Chrome では H.264 で書き出せるはず（AAC は Linux 版では無いことがあるので記録のみ）
+  if (process.env.EXPECT_H264 === '1') check('H.264 available in Google Chrome', vcodec === 'H.264', `video=${vcodec} audio=${acodec}`);
   // GPU なし（ソフトウェア描画＋ソフトウェア VP9）だと 1 秒あたり約 2 コマなので、先頭 3 秒だけ書き出す
   await page.evaluate(() => { window.__hg.xp.limit = 3; });
   const t0 = Date.now();
@@ -385,9 +394,21 @@ async function sheet(page, file, rows) {
     for (const ft of [0.2, 0.5, 0.8]) {
       video.currentTime = expDur * ft;
       await new Promise((r) => { video.onseeked = r; });
+      // seeked 直後はデコード済みのコマがまだ無いことがある（Chrome の H.264 など）。
+      // 表示されるまで待ち、何も描けなかった（全画素が透明）なら少し待って取り直す
+      if (video.requestVideoFrameCallback) await Promise.race([new Promise((r) => video.requestVideoFrameCallback(r)), new Promise((r) => setTimeout(r, 500))]);
       const c = document.createElement('canvas'); c.width = 64; c.height = 36;
-      const g = c.getContext('2d'); g.drawImage(video, 0, 0, 64, 36);
-      const d = g.getImageData(0, 0, 64, 36).data;
+      const g = c.getContext('2d');
+      let d;
+      for (let tries = 0; tries < 10; tries++) {
+        g.clearRect(0, 0, 64, 36);
+        g.drawImage(video, 0, 0, 64, 36);
+        d = g.getImageData(0, 0, 64, 36).data;
+        let drawn = false;
+        for (let i = 3; i < d.length; i += 4) if (d[i] > 0) { drawn = true; break; }
+        if (drawn) break;
+        await new Promise((r) => setTimeout(r, 100));
+      }
       let sum = 0, sum2 = 0;
       for (let i = 0; i < d.length; i += 4) { const y = (d[i] + d[i + 1] + d[i + 2]) / 3; sum += y; sum2 += y * y; }
       const n = d.length / 4, m = sum / n;

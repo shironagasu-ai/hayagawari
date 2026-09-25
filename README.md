@@ -74,16 +74,20 @@ tests/e2e.mjs    … Playwright による E2E テスト
 - カットは BPM の拍頭に置き、動きは「溜めて（ほぼ静止 or 微速ドリフト）→ 数フレームで詰める → ピタッと止める」で設計
 - 詳細な設計は [docs/design.md](docs/design.md)
 
-## GitHub Pages で公開する
+## 自動テストと公開（GitHub Actions）
 
-リポジトリの **Settings → Pages → Build and deployment** で
-Source: `Deploy from a branch`、Branch: `main` / `/ (root)` を選ぶだけです（`.nojekyll` 同梱）。
+`.github/workflows/ci.yml`
+
+- **PR と main へのプッシュ**で E2E テストを実行。Playwright の Chromium と、一般配布の Google Chrome の 2 種類で並行して回す（Chrome では H.264 で書き出せることも確認）
+- テストのスクリーンショットと書き出した動画は、実行結果の Artifacts から 7 日間ダウンロードできる
+- **main でテストが通ったときだけ** GitHub Pages へ公開（`index.html` / `src` / `vendor` / `LICENSE` のみ）
+- 事前設定: Settings → Pages → Build and deployment → Source を **GitHub Actions** にする
 
 ## ローカルで動かす / テスト
 
 ```sh
 python3 -m http.server 8000     # → http://localhost:8000/
-npm i && npm test               # E2E（Chromium は CHROMIUM_PATH で指定可）
+npm ci && npm test              # E2E（Chromium は CHROMIUM_PATH で指定可）
 ```
 
 ## ライセンス / クレジット
