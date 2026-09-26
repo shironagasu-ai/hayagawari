@@ -298,10 +298,12 @@ async function sheet(page, file, rows) {
   check('summary says off/auto', (await page.textContent('#adv-sum')).includes('おまかせ') && await page.evaluate(() => document.querySelector('#adv-reset').hidden));
   await page.evaluate(() => window.__hg.loadSamples());
   await page.waitForFunction(() => window.__hg.state.works.length === 6, null, { timeout: 30000 });
-  check('titles/focal hidden while closed', await page.evaluate(() => !document.querySelector('.work .meta').checkVisibility()));
+  // 作品ごとの設定（タイトル・注目点）は、詳細設定を閉じていても編集でき、反映される
+  check('titles and focal points editable while closed', await page.evaluate(() => document.querySelector('.work .meta').checkVisibility() && document.querySelector('.work .thumb .pt').checkVisibility() && document.querySelector('#works-hint').checkVisibility()));
   await page.click('.work:nth-child(1) .thumb');
-  check('focal editor stays closed while accordion closed', await page.evaluate(() => document.querySelector('#fe').hidden));
-  // 手動の注目点・タイトルを仕込んでおく（閉じている間は無視されるはず）
+  check('focal editor opens while accordion closed', await page.evaluate(() => !document.querySelector('#fe').hidden));
+  await page.click('#fe-close');
+  // 手動の注目点・タイトルを仕込んでおく（閉じていても使われるはず）
   await page.evaluate(() => { const w = window.__hg.state.works[0]; w.title = 'MANUAL TITLE'; w.focal = [{ x: 0.05, y: 0.05, size: 0.1, strength: 1, manual: true }]; });
   await page.fill('#artist', 'EASY');
   await page.fill('#subline', 'ILLUSTRATION WORKS');
@@ -316,7 +318,7 @@ async function sheet(page, file, rows) {
   // ランダム抽選なので偶然一致することはある（1回あたり約 1/72）。4回すべて一致しなければ「指定を無視している」と判定
   check('closed ignores style/opener from URL', !films.every((f) => f.theme === 'GLITCH' && f.opener === 'type'));
   check('closed: new seed every play', new Set(films.map((f) => f.seed)).size === 4 && !films.some((f) => f.seed === 'EASY-0003'));
-  check('closed ignores manual title/focal', films.every((f) => f.title !== 'MANUAL TITLE' && f.fx !== 0.05));
+  check('closed still uses manual title/focal', films.every((f) => f.title === 'MANUAL TITLE' && f.fx === 0.05), JSON.stringify(films.map((f) => [f.title, f.fx])));
   check('plays', films[3].playing);
   check('closed URL omits advanced params', await page.evaluate(() => !location.hash.includes('style=') && !location.hash.includes('adv=')));
   await page.evaluate(() => window.__hg.toEditor());

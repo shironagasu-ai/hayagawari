@@ -5,6 +5,11 @@
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-09-26
+
+### 変更
+- 作品ごとのタイトルと注目点を、詳細設定の開閉に関係なくいつでも編集できるようにし、常に映像に反映するようにした（これまでは詳細設定を開いたときだけ表示・反映していたため、編集できないように見えていた）。詳細設定は映像全体の設定（テンポ・スタイル・並び順・オープニング・エンディング・シード）だけを扱う
+
 ## [0.9.0] - 2026-09-26
 
 1.0 に向けた準備版。トップページを作り直し、作業を保存できるようにしました（1.0.0 は演出を増やす次の版で出す予定）。
@@ -64,5 +69,6 @@
 ### 追加
 - 最初の版：イラストの注目点を解析し、シードごとに違う演出のポートフォリオ映像を生成（#1）
 
-[Unreleased]: https://github.com/shironagasu-ai/hayagawari/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/shironagasu-ai/hayagawari/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/shironagasu-ai/hayagawari/releases/tag/v0.9.1
 [0.9.0]: https://github.com/shironagasu-ai/hayagawari/releases/tag/v0.9.0

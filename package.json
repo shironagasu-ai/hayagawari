@@ -1,6 +1,6 @@
 {
   "name": "hayagawari",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "private": true,
   "type": "module",
   "description": "E2E テスト用の開発依存のみ。本体はビルド不要の静的ファイル。",
