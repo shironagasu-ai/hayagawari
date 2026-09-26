@@ -17,7 +17,7 @@ const $ = (s) => document.querySelector(s);
 const canvas = $('#gl');
 const body = document.body;
 
-const ASPECTS = { '16:9': [1920, 1080], '9:16': [1080, 1920], '1:1': [1080, 1080] };
+const ASPECTS = { '16:9': [1920, 1080], '4:3': [1440, 1080], '1:1': [1080, 1080], '3:4': [1080, 1440], '9:16': [1080, 1920] };
 
 let renderer;
 try {
