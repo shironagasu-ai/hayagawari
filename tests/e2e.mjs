@@ -770,7 +770,10 @@ async function sheet(page, file, rows) {
   await drag(q1, { x: q1.x, y: q1.y - 200 }, 0);
   const m2 = await names(t.page);
   check('touch quick swipe scrolls instead of reordering', JSON.stringify(m2) === JSON.stringify(m1) && await t.page.evaluate(() => !document.querySelector('.sort-ghost')), `${scroll0} ${m2.join(',')}`);
+  // スワイプの慣性スクロールが止まるのを待ってから位置を測る（実際の Chrome は慣性で少し流れ続ける）
+  await t.page.waitForFunction(() => new Promise((res) => { const ed = document.querySelector('#editor'); const a = ed.scrollTop; setTimeout(() => res(ed.scrollTop === a), 250); }), null, { timeout: 10000, polling: 300 });
   await t.page.evaluate(() => document.querySelector('#works').scrollIntoView({ block: 'center' }));
+  await t.page.waitForTimeout(300);
   const g1 = await center(t.page, '#works .work:nth-child(1) .grip');
   const q2 = await center(t.page, '#works .work:nth-child(2) .thumb');
   await drag(g1, { x: q2.x + 25, y: q2.y }, 0);
