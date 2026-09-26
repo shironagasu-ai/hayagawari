@@ -18,7 +18,7 @@ import { THEMES, STYLE_KEYS, PACE } from './fx/themes.js';
 import { DECORS } from './fx/decors.js';
 import { colorsFor } from './fx/palettes.js';
 import { VARIANTS, VARIANT_KEYS } from './fx/variants.js';
-import { EXIT_DUR, ENTRY_DUR, transitionHint, drawBars, TRANSITION_KEYS } from './fx/transitions.js';
+import { EXIT_DUR, ENTRY_DUR, transitionHint, drawBars, TRANSITION_KEYS, GAP_TRANSITIONS } from './fx/transitions.js';
 import { OPENERS } from './fx/openers.js';
 import { CLOSERS } from './fx/closers.js';
 
@@ -51,8 +51,11 @@ export function buildFilm(opts) {
   const up = (s) => (theme.upper ? s.toUpperCase() : s);
 
   // opts.palette / opts.transition / opts.decor はカタログ・テスト用（抽選は通常どおり行い、結果だけ差し替える）
-  const workColors = works.map((w, i) => colorsFor(w, workThemes[i], opts.palette));
-  const globalCol = workColors[0] || colorsFor({ roles: { dominant: [0.1, 0.1, 0.1], accent: [1, 0.3, 0.3] } }, theme, opts.palette);
+  // 配色はスタイルの重み（palettes）で選ぶ。同じスタイルの作品は同じ配色の傾向にそろえる
+  const palPick = {};
+  const paletteFor = (name) => (palPick[name] ??= rng.weighted(THEMES[name].palettes || { [THEMES[name].bg]: 1 }));
+  const workColors = works.map((w, i) => colorsFor(w, workThemes[i], opts.palette || paletteFor(workThemeNames[i])));
+  const globalCol = workColors[0] || colorsFor({ roles: { dominant: [0.1, 0.1, 0.1], accent: [1, 0.3, 0.3] } }, theme, opts.palette || paletteFor(baseName));
 
   // ---- トランジション列（境界ごと）
   const nBound = works.length + 1;
@@ -161,6 +164,12 @@ export function buildFilm(opts) {
     if (tr.type === 'bars') addEvent(T, 'shake', 3, 0.15);
     if (tr.type === 'spin') addEvent(T, 'aberr', 6, 0.3);
     if (tr.type === 'door') addEvent(T, 'shake', 3, 0.15);
+    if (tr.type === 'pixelate') addEvent(T, 'aberr', 3, 0.25);
+    if (tr.type === 'dissolve') addEvent(T, 'aberr', 2, 0.3);
+    if (tr.type === 'halftone') addEvent(T, 'flash', 0.2, 0.14);
+    if (tr.type === 'diamond') addEvent(T, 'shake', 2, 0.12);
+    if (tr.type === 'tv') addEvent(T - 0.12, 'flash', 0.35, 0.16);
+    if (tr.type === 'flip') addEvent(T, 'shake', 2.5, 0.12);
   }
   // ループ時の頭（クロージング→オープニング）
   addEvent(0, 'flash', 0.8, 0.3);
@@ -243,7 +252,7 @@ export function buildFilm(opts) {
       if (t < T - 0.4 || t > T + 0.6) continue;
       drawBars(r, tr, t - T, W, H, segments[b].col, segments[b + 1].col);
     }
-    const showsGap = (tr) => tr && (tr.type === 'iris' || tr.type === 'door' || tr.type === 'spin');
+    const showsGap = (tr) => tr && GAP_TRANSITIONS.includes(tr.type);
     if (showsGap(seg.inT) && lt < ENTRY_DUR && i > 0) bgCol = seg.inT.color;
     if (showsGap(seg.outT) && lt >= outStart) bgCol = seg.outT.color;
 
