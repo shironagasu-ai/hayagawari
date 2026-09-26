@@ -650,6 +650,7 @@ async function sheet(page, file, rows) {
   const inPlayer = () => page.evaluate(() => document.body.classList.contains('playing'));
   await page.click('#go');
   check('back button visible in player', await page.evaluate(() => document.querySelector('#back').checkVisibility()));
+  check('fullscreen button shown where supported', await page.evaluate(() => document.querySelector('#fs').checkVisibility()));
   // 操作が隠れるまで待つ → 戻るは薄く残り、画面のタップでは止まらず操作が出る
   await page.waitForFunction(() => document.body.classList.contains('idle'), null, { timeout: 10000 });
   await page.waitForTimeout(500); // 薄くなるアニメーションが終わるまで
@@ -680,6 +681,31 @@ async function sheet(page, file, rows) {
   check('history does not pile up', len1 <= len0 + 1 && !(await inPlayer()), `${len0} -> ${len1}`);
   check('no page errors (player back)', errors.length === 0, errors.join('\n'));
   await page.close();
+}
+
+// ---- 12. 詳細設定からカタログへ／全画面に対応していないブラウザでは全画面ボタンを出さない
+{
+  const { page, errors } = await openPage({ width: 1280, height: 800 });
+  await page.evaluate(() => window.__hg.setAdvOpen(true));
+  const links = await page.evaluate(() => [...document.querySelectorAll('#adv a.cat-link')].map((a) => a.getAttribute('href')));
+  check('advanced settings link to the catalog', JSON.stringify(links) === JSON.stringify(['#catalog=style', '#catalog=opener', '#catalog=closer']), links.join(','));
+  await page.click('#adv a[href="#catalog=closer"]');
+  await page.waitForFunction(() => !document.querySelector('#catalog').hidden, null, { timeout: 10000 });
+  check('catalog link opens that category', await page.evaluate(() => window.__hg.catalog.current === 'closer'));
+  await page.click('#cat-back');
+  await page.waitForFunction(() => document.querySelector('#catalog').hidden, null, { timeout: 10000 });
+  check('back from catalog keeps advanced settings open', await page.evaluate(() => document.querySelector('#adv').open && window.__hg.state.advOpen));
+  check('no page errors (catalog links)', errors.length === 0, errors.join('\n'));
+  await page.close();
+  // iPhone の Safari 相当（ページの全画面に対応していない）
+  const ip = await browser.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+  await ip.addInitScript(() => {
+    for (const k of ['fullscreenEnabled', 'webkitFullscreenEnabled']) Object.defineProperty(Document.prototype, k, { get: () => false, configurable: true });
+  });
+  await ip.goto('http://localhost:8941/', { waitUntil: 'networkidle' });
+  await ip.waitForFunction(() => window.__hg, null, { timeout: 30000 });
+  check('fullscreen button hidden where unsupported (iPhone)', await ip.evaluate(() => document.querySelector('#fs').hidden));
+  await ip.close();
 }
 
 // ---- 6. トップ: 作例動画・ロゴ・ボタン

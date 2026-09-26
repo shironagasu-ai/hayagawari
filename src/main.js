@@ -359,13 +359,16 @@ function pause() {
 }
 
 // fromHistory: ブラウザの「戻る」で閉じたとき（履歴はもう戻っている）
+const fullscreenEl = () => document.fullscreenElement || document.webkitFullscreenElement;
+const exitFullscreen = () => (document.exitFullscreen || document.webkitExitFullscreen)?.call(document);
+
 function toEditor({ fromHistory = false } = {}) {
   pause();
   // カタログの見本を流していたら、本編の映像は作り直す
   if (state.catalogFilm) { state.film = null; state.catalogFilm = false; }
   body.classList.remove('playing');
   heroSync();
-  if (document.fullscreenElement) document.exitFullscreen();
+  if (fullscreenEl()) exitFullscreen();
   if (player.entry) {
     player.entry = false;
     if (!fromHistory) { player.pendingBack = true; history.back(); } // ボタンで閉じたときは、積んだ履歴を取り除く
@@ -804,7 +807,15 @@ for (const [id, key] of [['#xp-res', 'res'], ['#xp-fps', 'fps']]) {
   });
 }
 $('#rec-cancel').addEventListener('click', () => { recCancelled = true; finishRecording(); });
-$('#fs').addEventListener('click', () => (document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen?.()));
+// 全画面: iPhone の Safari はページの全画面に対応していないので、使えないブラウザではボタンを出さない（古い Safari は webkit 付き）
+const canFullscreen = !!(document.fullscreenEnabled || document.webkitFullscreenEnabled);
+$('#fs').hidden = !canFullscreen;
+$('#fs').addEventListener('click', () => {
+  if (!canFullscreen) return;
+  if (fullscreenEl()) { exitFullscreen(); return; }
+  const el = document.documentElement;
+  (el.requestFullscreen || el.webkitRequestFullscreen)?.call(el);
+});
 
 const seek = $('#seek');
 seek.addEventListener('pointerdown', (e) => {
