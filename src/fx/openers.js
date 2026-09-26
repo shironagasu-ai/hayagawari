@@ -4,7 +4,7 @@
 
 import { clamp, lerp, prog, expoOut, backOut, snap, antic } from '../ease.js';
 import {
-  pad2, withA, pointsFor, clampFull, closeHq, drawCam, coverUV, panelZoom,
+  pad2, withA, mix, pointsFor, clampFull, closeHq, drawCam, camQuad, camLerp, coverUV, panelZoom,
   drawText, textH, textW, fitIn,
 } from '../kit.js';
 import { nameText, subText, nameLanding, circleP, endingText, endingBlock } from './bookend-kit.js';
@@ -368,6 +368,356 @@ export const OPENERS = {
     };
   },
 
+  // ブラインドの羽根が拍ごとに開いて寄りが入れ替わり、最後は閉じて名前
+  blinds(C) {
+    const { works, W, H, beat, rng } = C;
+    const D = beat * 6;
+    const n = W > H ? 9 : 7;
+    const shots = [0, 1, 2].map((i) => {
+      const w = works[i % works.length];
+      const f = pointsFor(w, 2, rng)[Math.floor(i / works.length) % 2];
+      return { w, f, z: panelZoom(w, f, W, H, rng.range(0.75, 1)) };
+    });
+    const tName = beat * 3;
+    const N = nameText(C, W > H ? 0.15 : 0.12, 0.84);
+    const SUB = subText(C);
+    for (let i = 0; i < 3; i++) C.ev(i * beat, 'aberr', 2.5, 0.2);
+    C.ev(tName, 'shake', 5, 0.25);
+    C.ev(tName + 0.3, 'flash', 0.3, 0.15);
+    const full = (r, S, lt, mask) => r.draw({ x: W / 2, y: H / 2, w: W, h: H, tex: S.w.tex, uv: coverUV(S.w, W, H, S.f.x, S.f.y, S.z * (1 + 0.03 * lt)), mask });
+    return {
+      dur: D,
+      draw(r, t, col) {
+        if (t < tName) {
+          const i = Math.min(2, Math.floor(t / beat));
+          const lt = t - i * beat;
+          if (i > 0) full(r, shots[i - 1], lt + beat);
+          else r.draw({ x: W / 2, y: H / 2, w: W, h: H, color: col.accent });
+          full(r, shots[i], lt, { type: 'blinds', p: snap(prog(lt, 0, beat * 0.6)), angle: i % 2 ? Math.PI / 2 : 0, count: n, stagger: 0.6 });
+          return;
+        }
+        // 背景色の羽根が閉じて、名前
+        const lt = t - tName;
+        const pc = snap(prog(lt, 0, 0.45));
+        if (pc < 1) full(r, shots[2], lt + beat);
+        r.draw({ x: W / 2, y: H / 2, w: W, h: H, color: col.bg, mask: { type: 'blinds', p: pc, angle: Math.PI, count: n, stagger: 0.6 } });
+        if (lt > 0.3) nameLanding(r, C, N, SUB, lt - 0.3, col);
+      },
+    };
+  },
+
+  // 注目点から円が開いて次の作品へ。最後は中央へ閉じて名前
+  iris(C) {
+    const { works, W, H, beat, rng, minDim } = C;
+    const D = beat * 6;
+    const shots = [0, 1, 2].map((i) => {
+      const w = works[i % works.length];
+      const f = pointsFor(w, 2, rng)[Math.floor(i / works.length) % 2];
+      const uv = coverUV(w, W, H, f.x, f.y, panelZoom(w, f, W, H, rng.range(0.7, 0.95)));
+      // 注目点が画面のどこに来るか（0..1）と、そこから最も遠い角までの距離
+      const cx = clamp((f.x - uv[0]) / (uv[2] - uv[0])), cy = clamp((f.y - uv[1]) / (uv[3] - uv[1]));
+      return { w, uv, cx, cy, far: Math.hypot(Math.max(cx, 1 - cx) * W, Math.max(cy, 1 - cy) * H) };
+    });
+    const tClose = beat * 3 - 0.35, tName = beat * 3;
+    const N = nameText(C, W > H ? 0.15 : 0.12, 0.84);
+    const SUB = subText(C);
+    for (let i = 0; i < 3; i++) C.ev(i * beat, 'aberr', 3, 0.2);
+    C.ev(tName, 'flash', 0.4, 0.18);
+    C.ev(tName, 'shake', 5, 0.25);
+    const th = Math.max(3, minDim * 0.008);
+    const farC = Math.hypot(W / 2, H / 2);
+    const full = (r, S, mask) => r.draw({ x: W / 2, y: H / 2, w: W, h: H, tex: S.w.tex, uv: S.uv, mask });
+    const ring = (r, x, y, R, col) => r.draw({ x, y, w: R * 2 + th, h: R * 2 + th, mode: 'ring', pat: [0, th, 0, 0], color: col });
+    return {
+      dur: D,
+      draw(r, t, col) {
+        if (t < tClose) {
+          const i = Math.min(2, Math.floor(t / beat));
+          const lt = t - i * beat;
+          if (i > 0) full(r, shots[i - 1]);
+          const S = shots[i];
+          const p = expoOut(prog(lt, 0.02, beat * 0.7));
+          full(r, S, { type: 'circle', p, cx: S.cx, cy: S.cy, soft: 2 });
+          if (p < 0.98) ring(r, S.cx * W, S.cy * H, p * S.far, col.accent);
+          return;
+        }
+        const lt = t - tClose;
+        const pc = 1 - snap(prog(lt, 0, 0.35));
+        if (pc > 0) {
+          full(r, shots[2], { type: 'circle', p: pc, cx: 0.5, cy: 0.5, soft: 2 });
+          ring(r, W / 2, H / 2, pc * farC, col.accent);
+        }
+        if (t >= tName) nameLanding(r, C, N, SUB, t - tName, col);
+      },
+    };
+  },
+
+  // 名前を繰り返した帯が何段も逆向きに流れ、はけると名前
+  marquee(C) {
+    const { works, W, H, beat, rng, tf, theme, minDim, up, artist } = C;
+    const D = beat * 6;
+    const rows = W > H ? 5 : 8;
+    const rh = H / rows;
+    const T = tf.get(`${up(artist || 'PORTFOLIO')}  /  `, { family: theme.font, size: Math.round(rh * 0.6), weight: Math.min(900, theme.weight + 100), tracking: theme.tracking });
+    const tw = Math.max(1, textW(T));
+    const bgs = [0, 1, 2].map((i) => {
+      const w = works[i % works.length];
+      const f = pointsFor(w, 2, rng)[Math.floor(i / works.length) % 2];
+      return { w, f, z: panelZoom(w, f, W, H, rng.range(0.8, 1.1)) };
+    });
+    const speed = Array.from({ length: rows }, () => W * rng.range(0.25, 0.45));
+    const tOut = beat * 3, tName = tOut + 0.35;
+    const N = nameText(C, W > H ? 0.15 : 0.12, 0.84);
+    const SUB = subText(C);
+    for (let i = 1; i < 3; i++) C.ev(i * beat, 'flash', 0.15, 0.1);
+    C.ev(tOut, 'aberr', 6, 0.35);
+    C.ev(tName, 'shake', 5, 0.25);
+    return {
+      dur: D,
+      draw(r, t, col) {
+        if (t >= tName) { nameLanding(r, C, N, SUB, t - tName, col); return; }
+        // 背景: 拍ごとに寄りが替わる（背景色で沈める）
+        const i = Math.min(2, Math.floor(t / beat));
+        const S = bgs[i];
+        r.draw({ x: W / 2, y: H / 2, w: W, h: H, tex: S.w.tex, uv: coverUV(S.w, W, H, S.f.x, S.f.y, S.z * (1 + 0.05 * (t - i * beat))), tint: [col.bg[0], col.bg[1], col.bg[2], 0.55] });
+        const y0 = (rh - textH(T)) / 2;
+        for (let k = 0; k < rows; k++) {
+          const dir = k % 2 ? -1 : 1;
+          const ein = expoOut(prog(t, k * 0.04, 0.45 + k * 0.04));
+          const eout = antic(prog(t, tOut - 0.1 + k * 0.03, tOut + 0.25 + k * 0.03), 0.3, 0.03);
+          if (eout >= 1) continue;
+          const scroll = ((dir * speed[k] * t) % tw + tw) % tw;
+          const shift = -dir * W * (1 - ein) + dir * W * 1.2 * eout;
+          const color = k % 2 ? col.accent : col.ink;
+          for (let x = scroll - tw * 2; x < W + tw; x += tw) drawText(r, T, x + shift, k * rh + y0, { color });
+        }
+      },
+    };
+  },
+
+  // 作品の寄りを敷き詰めたタイルが弾んで並び、裏返りながら消えると名前
+  tiles(C) {
+    const { works, W, H, beat, rng, minDim } = C;
+    const D = beat * 6;
+    const [cols, rows] = W > H * 1.2 ? [4, 3] : W < H * 0.8 ? [3, 5] : [3, 3];
+    const gap = Math.max(2, minDim * 0.006);
+    const tw = (W - gap * (cols + 1)) / cols, th = (H - gap * (rows + 1)) / rows;
+    const cnt = cols * rows;
+    const inOrder = rng.shuffle([...Array(cnt).keys()]);
+    const outOrder = rng.shuffle([...Array(cnt).keys()]);
+    const tOut = beat * 2.6;
+    const tiles = [];
+    for (let j = 0; j < rows; j++) {
+      for (let i = 0; i < cols; i++) {
+        const k = j * cols + i;
+        const w = works[k % works.length];
+        const f = pointsFor(w, 3, rng)[Math.floor(k / works.length) % 3];
+        tiles.push({
+          w, x: gap + tw / 2 + i * (tw + gap), y: gap + th / 2 + j * (th + gap),
+          uv: coverUV(w, tw, th, f.x, f.y, panelZoom(w, f, tw, th, rng.range(0.8, 1.2))),
+          tin: 0.05 + (inOrder.indexOf(k) / cnt) * beat * 1.4,
+          tout: tOut + (outOrder.indexOf(k) / cnt) * beat * 0.6,
+        });
+      }
+    }
+    const N = nameText(C, W > H ? 0.15 : 0.12, 0.84);
+    const SUB = subText(C);
+    C.ev(beat * 1.5, 'shake', 3, 0.15);
+    C.ev(tOut + beat * 0.3, 'aberr', 4, 0.3);
+    C.ev(tOut + beat * 0.7, 'flash', 0.3, 0.15);
+    return {
+      dur: D,
+      draw(r, t, col) {
+        if (t > tOut) nameLanding(r, C, N, SUB, t - tOut - 0.1, col);
+        for (const T of tiles) {
+          const ein = backOut(prog(t, T.tin, T.tin + 0.35), 1.4);
+          if (ein <= 0) continue;
+          const flip = snap(prog(t, T.tout, T.tout + 0.3));
+          if (flip >= 1) continue;
+          // 縦軸で 90° 裏返る（幅が縮み、アクセント色に染まる）
+          r.draw({ x: T.x, y: T.y, w: tw * ein * Math.cos(flip * Math.PI / 2), h: th * ein, tex: T.w.tex, uv: T.uv, tint: [col.accent[0], col.accent[1], col.accent[2], flip * 0.9] });
+        }
+      },
+    };
+  },
+
+  // 注目点の超寄りから拍ごとに段階的に引き、額に収まった作品の下に名前
+  pullback(C) {
+    const { works, W, H, beat, rng, minDim } = C;
+    const D = beat * 6;
+    const w = works[0];
+    const f = pointsFor(w, 1, rng)[0];
+    const land = W > H;
+    const b = fitIn(w.aspect, W * (land ? 0.46 : 0.72), H * (land ? 0.5 : 0.4));
+    const cams = [
+      clampFull(w, { ix: f.x, iy: f.y, sx: W / 2, sy: H / 2, hq: closeHq(w, f, W, H, 1.7) }, W, H),
+      clampFull(w, { ix: f.x, iy: f.y, sx: W / 2, sy: H / 2, hq: closeHq(w, f, W, H, 0.9) }, W, H),
+      clampFull(w, { ix: 0.5, iy: 0.5, sx: W / 2, sy: H / 2, hq: 0 }, W, H),
+      { ix: 0.5, iy: 0.5, sx: W / 2, sy: H * (land ? 0.36 : 0.33), hq: b.h },
+    ];
+    const steps = [beat, beat * 2, beat * 3];
+    const camAt = (t) => {
+      let c = cams[0];
+      for (let k = 0; k < 3; k++) {
+        const e = snap(prog(t, steps[k] - 0.35, steps[k]));
+        if (e <= 0) break;
+        c = camLerp(cams[k], cams[k + 1], e);
+      }
+      // 止まっている間もわずかに引き続ける
+      return { ...c, hq: c.hq * (1 - 0.02 * ((t % beat) / beat)) };
+    };
+    const N = nameText(C, land ? 0.11 : 0.1, 0.84);
+    const SUB = subText(C);
+    steps.forEach((s, k) => { C.ev(s - 0.1, 'aberr', 3, 0.2); C.ev(s, 'shake', 3 + k, 0.2); });
+    return {
+      dur: D,
+      draw(r, t, col) {
+        const c = camAt(t);
+        const ef = snap(prog(t, steps[2] - 0.35, steps[2]));
+        if (ef > 0) {
+          const q = camQuad(w, c);
+          const bb = minDim * 0.012 * ef;
+          r.draw({ x: q.x, y: q.y, w: q.w + bb * 2, h: q.h + bb * 2, color: col.ink });
+        }
+        drawCam(r, w, c, t > 1 / 60 ? camAt(t - 1 / 60) : null);
+        if (t > steps[2]) nameLanding(r, C, N, SUB, t - steps[2], col, { cy: H * (land ? 0.8 : 0.76) });
+      },
+    };
+  },
+
+  // 対角線で 2 枚の寄りがすれ違い、境目の線が帯になって名前を載せる
+  diagonal(C) {
+    const { works, W, H, beat, rng, minDim } = C;
+    const D = beat * 6;
+    const A = works[0], B = works[1 % works.length];
+    const fa = pointsFor(A, 1, rng)[0], fb = pointsFor(B, 2, rng)[works.length > 1 ? 0 : 1];
+    const za = panelZoom(A, fa, W, H, rng.range(0.8, 1)), zb = panelZoom(B, fb, W, H, rng.range(0.8, 1));
+    const nrm = Math.atan2(W, H); // 左下→右上の対角線に直交する向き
+    const lineAng = Math.atan2(-H, W);
+    const ux = Math.cos(lineAng), uy = Math.sin(lineAng);
+    const diag = Math.hypot(W, H);
+    const tOut = beat * 2.5, tName = tOut + 0.4;
+    const N = nameText(C, W > H ? 0.14 : 0.11, 0.8);
+    const SUB = subText(C);
+    const bandH = textH(N.T, N.s) + minDim * 0.1;
+    C.ev(0.05, 'aberr', 3, 0.3);
+    C.ev(tOut, 'aberr', 5, 0.3);
+    C.ev(tName, 'shake', 6, 0.25);
+    return {
+      dur: D,
+      draw(r, t, col) {
+        for (let k = 0; k < 2; k++) {
+          const w = k ? B : A, f = k ? fb : fa, z = k ? zb : za, s = k ? 1 : -1;
+          const ein = expoOut(prog(t, 0.04 + k * 0.1, 0.6 + k * 0.1));
+          const eout = antic(prog(t, tOut - 0.1 + k * 0.05, tOut + 0.3 + k * 0.05), 0.3, 0.03);
+          if (ein <= 0 || eout >= 1) continue;
+          const off = s * diag * (1 - ein) - s * diag * 1.1 * eout;
+          r.draw({
+            x: W / 2 + ux * off, y: H / 2 + uy * off, w: W, h: H, tex: w.tex,
+            uv: coverUV(w, W, H, f.x, f.y, z * (1 + 0.04 * t)),
+            mask: { type: 'wipe', p: 0.5, angle: k ? nrm + Math.PI : nrm, soft: 1.5 },
+          });
+        }
+        // 境目の線 → 水平の帯
+        const eb = expoOut(prog(t, 0.3, 0.8));
+        const er = snap(prog(t, tOut, tName));
+        const len = lerp(diag * eb, W, er);
+        const h = lerp(Math.max(3, minDim * 0.01), bandH, er);
+        if (len > 0) r.draw({ x: W / 2, y: H / 2, w: len, h, rot: lerp(lineAng, 0, er), color: col.accent });
+        if (t >= tName) {
+          const lt = t - tName;
+          const sc = N.s * (1 + 0.1 * (1 - expoOut(prog(lt, 0, 0.6))));
+          drawText(r, N.T, W / 2, H / 2 - textH(N.T, sc) / 2, { align: 'center', scale: sc, reveal: expoOut(prog(lt, 0, 0.5)), color: col.bg });
+          drawText(r, SUB, W / 2, H / 2 + bandH / 2 + minDim * 0.04, { align: 'center', reveal: expoOut(prog(lt, 0.2, 0.7)), color: col.ink });
+        }
+      },
+    };
+  },
+
+  // 網点が縮んで作品が現れ、アクセント色の網点が覆い尽くすと名前
+  halftone(C) {
+    const { works, W, H, beat, rng, minDim } = C;
+    const D = beat * 6;
+    const shots = [0, 1].map((i) => {
+      const w = works[i % works.length];
+      const f = pointsFor(w, 2, rng)[Math.floor(i / works.length) % 2];
+      return { w, f, z: panelZoom(w, f, W, H, rng.range(0.75, 1)) };
+    });
+    const per = Math.max(8, minDim * 0.045);
+    const ang = Math.PI / 4;
+    const tA = beat * 1.5, tName = beat * 3;
+    const N = nameText(C, W > H ? 0.15 : 0.12, 0.84);
+    const SUB = subText(C);
+    C.ev(tA, 'flash', 0.3, 0.15);
+    C.ev(tName, 'shake', 5, 0.25);
+    C.ev(tName, 'aberr', 4, 0.3);
+    const full = (r, o) => r.draw({ x: W / 2, y: H / 2, w: W, h: H, ...o });
+    const dots = (r, ratio, color, drift) => { if (ratio > 0.01) full(r, { mode: 'dots', pat: [per, ratio, ang, drift], color }); };
+    return {
+      dur: D,
+      draw(r, t, col) {
+        if (t < tName) {
+          const i = t < tA ? 0 : 1;
+          const S = shots[i];
+          const lt = t - i * tA;
+          full(r, { tex: S.w.tex, uv: coverUV(S.w, W, H, S.f.x, S.f.y, S.z * (1 + 0.04 * lt)) });
+          if (i === 0) dots(r, 1.5 * (1 - snap(prog(t, 0, tA * 0.7))), col.bg, 0);
+          else dots(r, 1.5 * snap(prog(t, tA + beat * 0.5, tName)), col.accent, per * 0.5 * lt);
+          return;
+        }
+        // 全面のアクセント色の上に名前 → 網点がほどけて背景色へ
+        const lt = t - tName;
+        const e = snap(prog(lt, beat * 0.6, beat * 1.4));
+        dots(r, 1.5 * (1 - e), col.accent, per * 0.5 * (lt + beat * 1.5));
+        nameLanding(r, C, N, SUB, lt, { ...col, ink: mix(col.bg, col.ink, e), accent: mix(col.bg, col.accent, e) });
+      },
+    };
+  },
+
+  // 斜めに傾いた短冊の寄りが拍に乗って右から滑り込み、上下にはけると名前
+  slant(C) {
+    const { works, W, H, beat, rng, minDim } = C;
+    const D = beat * 6;
+    const n = W > H ? 4 : 3;
+    const th = 0.12; // 傾き
+    const ux = Math.cos(th), uy = Math.sin(th);
+    const pw = (W * ux + H * uy) / n; // 傾けた座標で画面の横幅を覆う
+    const L = H / ux + W * uy + 4;
+    const strips = Array.from({ length: n }, (_, i) => {
+      const w = works[i % works.length];
+      const f = pointsFor(w, 2, rng)[Math.floor(i / works.length) % 2];
+      return { w, uv: coverUV(w, pw, L, f.x, f.y, panelZoom(w, f, pw, L, rng.range(0.8, 1.1))), t0: 0.05 + i * (beat * 1.6) / n };
+    });
+    const tOut = beat * 2.6, tName = tOut + 0.35;
+    const N = nameText(C, W > H ? 0.15 : 0.12, 0.84);
+    const SUB = subText(C);
+    strips.forEach((S) => C.ev(S.t0 + 0.25, 'shake', 3, 0.12));
+    C.ev(tOut, 'aberr', 5, 0.3);
+    return {
+      dur: D,
+      draw(r, t, col) {
+        if (t >= tName - 0.1) nameLanding(r, C, N, SUB, t - tName + 0.1, col);
+        // 背景のアクセントの斜め帯（すき間から見える）
+        const eb = expoOut(prog(t, 0, 0.4)) * (1 - snap(prog(t, tOut, tName)));
+        if (eb > 0) r.draw({ x: W / 2, y: H / 2, w: W * 1.6 * eb, h: L, rot: th, color: col.accent });
+        for (let i = 0; i < n; i++) {
+          const S = strips[i];
+          const ein = expoOut(prog(t, S.t0, S.t0 + 0.45));
+          const eout = antic(prog(t, tOut - 0.1 + i * 0.04, tOut + 0.3 + i * 0.04), 0.3, 0.03);
+          if (ein <= 0 || eout >= 1) continue;
+          const a = (i - (n - 1) / 2) * pw + W * 1.2 * (1 - ein); // 傾けた横軸に沿った位置
+          const b = (i % 2 ? 1 : -1) * L * 1.1 * eout; // はけるときは縦軸に沿って上下へ
+          const e0 = expoOut(prog(t - 1 / 60, S.t0, S.t0 + 0.45));
+          const vel = (e0 - ein) * W * 1.2 / pw;
+          r.draw({
+            x: W / 2 + ux * a - uy * b, y: H / 2 + uy * a + ux * b, w: pw + 1, h: L, rot: th,
+            tex: S.w.tex, uv: S.uv, blur: Math.abs(vel) > 0.002 ? [vel, 0] : undefined,
+          });
+        }
+      },
+    };
+  },
+
 };
 
-export const OPENER_LABELS = { montage: 'モンタージュ', type: 'タイプ', shutter: 'シャッター', countdown: 'カウント', knockout: '抜き文字', slice: 'スライス', tunnel: 'トンネル', boot: '起動ログ' };
+export const OPENER_LABELS = { montage: 'モンタージュ', type: 'タイプ', shutter: 'シャッター', countdown: 'カウント', knockout: '抜き文字', slice: 'スライス', tunnel: 'トンネル', boot: '起動ログ', blinds: 'ブラインド', iris: 'アイリス', marquee: 'マーキー', tiles: 'タイル', pullback: '段階引き', diagonal: '対角', halftone: '網点', slant: 'スラント' };

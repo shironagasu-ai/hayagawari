@@ -698,6 +698,10 @@ const hashAdv = readHash();
   state.sound = SOUND_MODES.includes(snd) ? snd : 'full';
 }
 $('#seed').value = state.seed;
+// オープニング・エンディングのボタンは演出の一覧から作る（演出を足すと自動で増える）
+for (const cat of ['opener', 'closer']) {
+  $('#' + cat).insertAdjacentHTML('beforeend', catalogKeys(cat).map((k) => `<button data-v="${k}">${labelOf(cat, k)[0]}</button>`).join(''));
+}
 bindSeg('#aspect', 'aspect');
 bindSeg('#pace', 'pace');
 bindSeg('#style', 'style');
