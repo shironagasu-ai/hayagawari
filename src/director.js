@@ -29,7 +29,6 @@ export { THEMES, STYLE_KEYS, VARIANT_KEYS };
 
 export function buildFilm(opts) {
   const { works, seed, W, H, tf, pace = 'normal', artist = '', subline = '', handle = '' } = opts;
-  const year = opts.year || new Date().getFullYear();
   const rng = createRng(`${seed}|${works.length}|${W}x${H}|${pace}`);
   const mixMode = opts.theme === 'MIX';
   const baseName = !mixMode && opts.theme && THEMES[opts.theme] ? opts.theme : rng.pick(Object.keys(THEMES));
@@ -49,7 +48,6 @@ export function buildFilm(opts) {
   const minDim = Math.min(W, H);
   const events = [];
   const segments = [];
-  const up = (s) => (theme.upper ? s.toUpperCase() : s);
 
   // opts.palette / opts.transition / opts.decor はカタログ・テスト用（抽選は通常どおり行い、結果だけ差し替える）
   // 配色はスタイルの重み（palettes）で選ぶ。同じスタイルの作品は同じ配色の傾向にそろえる
@@ -83,7 +81,7 @@ export function buildFilm(opts) {
 
   // ---- オープニング
   const C = {
-    works, W, H, beat, rng: rng.fork('bookends'), tf, theme, minDim, artist, subline, handle, year, up, ev: null,
+    works, W, H, beat, rng: rng.fork('bookends'), tf, theme, minDim, artist, subline, handle, ev: null,
   };
   const openerKey = OPENERS[opts.opener] ? opts.opener : rng.pick(Object.keys(OPENERS));
   const closerKey = CLOSERS[opts.closer] ? opts.closer : rng.pick(Object.keys(CLOSERS));
@@ -108,7 +106,7 @@ export function buildFilm(opts) {
     const side = srng.pick(['left', 'right']);
     const layout = layoutFor(work, W, H, idx % 2 ? (side === 'left' ? 'right' : 'left') : side);
     const S = {
-      work, idx, total: works.length, artist, year, W, H, beat, D, rng: srng, tf, theme: wtheme, minDim, layout,
+      work, idx, total: works.length, artist, W, H, beat, D, rng: srng, tf, theme: wtheme, minDim, layout,
       points: pointsFor(work, 3, srng),
       event: (t, kind, amt, dur, color) => addEvent(start + t, kind, amt, dur, color),
     };
@@ -179,7 +177,7 @@ export function buildFilm(opts) {
   // ---- 描画
   const fx = { aberr: 0, grain: theme.grain, vignette: theme.vignette, flash: [1, 1, 1, 0], shakeX: 0, shakeY: 0 };
   const hint = {};
-  const HUD = makeHud({ tf, theme, W, H, minDim, works, artist, subline, year, up });
+  const HUD = makeHud({ tf, theme, W, H, minDim, works, artist, subline });
 
   function segmentAt(t) {
     for (let i = segments.length - 1; i >= 0; i--) if (t >= segments[i].start) return i;
@@ -271,12 +269,12 @@ export function buildFilm(opts) {
 }
 
 // 常駐 HUD: 作家名・通し番号・進行ティック
-function makeHud({ tf, theme, W, H, minDim, works, artist, subline, year, up }) {
+function makeHud({ tf, theme, W, H, minDim, works, artist, subline }) {
   const m = minDim * 0.045;
   const fs = Math.round(minDim * 0.016);
-  const A = tf.get(up(artist || 'PORTFOLIO'), { family: 'mono', size: fs, weight: 700, tracking: 0.25 });
-  // 右上: サブタイトルがあれば「サブタイトル — 年」、なければ年だけ
-  const R = tf.get(subline ? `${up(subline)} — ${year}` : String(year), { family: 'mono', size: fs, weight: 500, tracking: 0.25 });
+  const A = tf.get(artist || 'PORTFOLIO', { family: 'mono', size: fs, weight: 700, tracking: 0.25 });
+  // 右上: サブタイトル（未入力なら出さない）
+  const R = subline ? tf.get(subline, { family: 'mono', size: fs, weight: 500, tracking: 0.25 }) : null;
   const nums = works.map((_, i) => tf.get(pad2(i + 1), { family: 'mono', size: Math.round(minDim * 0.03), weight: 700, tracking: 0.05 }));
   const TOT = tf.get(`/ ${pad2(works.length)}`, { family: 'mono', size: fs, weight: 500, tracking: 0.2 });
   const n = works.length;

@@ -151,17 +151,16 @@ export function layoutFor(work, W, H, side) {
 
 // タイトル・番号・メタ情報のブロック
 export function makeTextBlock(S) {
-  const { tf, theme, work, idx, total, artist, minDim, layout, year } = S;
-  const up = (s) => (theme.upper ? s.toUpperCase() : s);
+  const { tf, theme, work, idx, artist, minDim, layout } = S;
   const side = layout.text.stack === 'side';
   const titleSize = Math.round(minDim * (side ? 0.08 : 0.066));
-  const T = tf.get(up(work.title), { family: theme.font, size: titleSize, weight: theme.weight, tracking: theme.tracking });
+  const T = tf.get(work.title, { family: theme.font, size: titleSize, weight: theme.weight, tracking: theme.tracking });
   const I = tf.get(`No.${pad2(idx + 1)}`, { family: 'mono', size: Math.round(minDim * 0.022), weight: 700, tracking: 0.18 });
-  const meta = [artist ? up(artist) : null, String(year)].filter(Boolean).join('  /  ');
-  const M = tf.get(meta, { family: 'mono', size: Math.round(minDim * 0.017), weight: 500, tracking: 0.14 });
+  // 作家名（未入力なら出さない）
+  const M = artist ? tf.get(artist, { family: 'mono', size: Math.round(minDim * 0.017), weight: 500, tracking: 0.14 }) : null;
   const scale = Math.min(1, layout.text.maxW / Math.max(1, textW(T)));
   const gap = minDim * 0.018;
-  const total_h = textH(I) + gap + textH(T, scale) + gap * 1.3 + textH(M);
+  const total_h = textH(I) + gap + textH(T, scale) + (M ? gap * 1.3 + textH(M) : 0);
   const y0 = side ? layout.text.y - total_h : layout.text.y;
   const barW = minDim * 0.05;
   return (r, t, t0, col) => {
