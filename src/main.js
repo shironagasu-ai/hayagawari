@@ -8,6 +8,7 @@ import { randomSeed, createRng } from './rng.js';
 import { initFocalEditor, openFocalEditor } from './focal-editor.js';
 import { pickEncoderConfig, exportFrames } from './export.js';
 import { newKey, putImage, saveSession, loadSession, requestPersist } from './store.js';
+import { song, initSong, setSongFile, clearSong, songMeta, stopPreview } from './song.js';
 import { VERSION, BUILD, PREVIEW, storageKey } from './version.js';
 import { initCatalog, catalogFilm, catalogKeys } from './catalog.js';
 import { CATEGORIES, labelOf } from './fx/labels.js';
@@ -259,7 +260,7 @@ async function saveNow() {
     // 手で直した注目点だけ保存（自動のものは読み込み時に解析し直す）
     focal: JSON.stringify(w.focal) === JSON.stringify(w.autoFocal) ? null : w.focal,
   }));
-  try { await saveSession({ v: 1, savedAt: Date.now(), settings, works }, () => state.works.map((w) => w.key)); } catch (e) { console.warn('保存できませんでした', e); }
+  try { await saveSession({ v: 1, savedAt: Date.now(), settings, works, song: songMeta() }, () => state.works.map((w) => w.key)); } catch (e) { console.warn('保存できませんでした', e); }
 }
 
 async function restoreSession() {
@@ -278,6 +279,8 @@ async function restoreSession() {
     $('#seed').value = state.seed;
     segSyncs.forEach((f) => f());
     updateAdvSummary();
+    // 曲（復元待ちの間に別の曲を選んでいたら、そちらを優先）
+    if (s.song && !song.cur) await setSongFile(s.song.blob, s.song.name, s.song);
     // 復元待ちの間にユーザーが画像を追加していたら、そちらを優先
     if (s.works.length && !state.works.length) {
       await addSources(s.works.map((w) => ({ src: w.blob, name: w.name, key: w.key, title: w.title, focal: w.focal })), { restoring: true });
@@ -341,6 +344,7 @@ function play(fromStart = true) {
   if (!state.film) return;
   if (fromStart) state.t = 0;
   state.playing = true;
+  stopPreview(); // 曲の試聴は止める
   if (!body.classList.contains('playing')) {
     body.classList.add('playing');
     // スマホの「戻る」（スワイプ・ブラウザの戻る）でプレーヤーを閉じられるよう、履歴を 1 つ積む
@@ -646,6 +650,7 @@ bindSeg('#order', 'order');
 bindSeg('#opener', 'opener');
 bindSeg('#closer', 'closer');
 initFocalEditor();
+initSong({ onChange: () => { state.film = null; scheduleSave(); }, toast });
 $('#adv').addEventListener('toggle', () => { if ($('#adv').open !== state.advOpen) setAdvOpen($('#adv').open); });
 $('#adv-reset').addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); resetAdv(); }); // summary 内なので開閉させない
 $('#pace').addEventListener('click', renderWorks);
@@ -906,5 +911,6 @@ window.__hg = {
   // GPU に溜まった描画命令を最後まで実行させる（1px 読み出しで同期。gl.finish は Chrome では待たない）
   sync: () => { const gl = renderer.gl; const px = new Uint8Array(4); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); return px[3]; },
   setSeed: (s) => { state.seed = s; $('#seed').value = s; state.film = null; },
+  song, setSongFile, clearSong,
   setOpt: (k, v) => { state[k] = v; state.film = null; segSyncs.forEach((f) => f()); updateAdvSummary(); },
 };

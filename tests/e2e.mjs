@@ -679,6 +679,101 @@ async function sheet(page, file, rows) {
   await page.close();
 }
 
+// ---- 11. 曲: 選ぶとテンポと拍を推定して表示。BPM の手直し・倍/半分・小節の頭・タップ・保存と復元・外す
+{
+  // テスト用の曲: 124 BPM・最初の拍 0.61 秒。キックは 1・3 拍目、スネアは 2・4 拍目、ハイハットは 8 分
+  const sr = 44100, secs = 24, bpm = 124, offset = 0.61, beat = 60 / bpm;
+  const x = new Float32Array(sr * secs);
+  let seed = 7;
+  const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296);
+  for (let i = 0; i < x.length; i++) x[i] = (rnd() - 0.5) * 0.03 + 0.08 * Math.sin((2 * Math.PI * 220 * i) / sr);
+  const hit = (t, f) => { const i0 = Math.round(t * sr); for (let j = 0; j < sr * 0.15 && i0 + j < x.length; j++) x[i0 + j] += f(j / sr); };
+  for (let k = 0; offset + k * beat < secs - 0.3; k++) {
+    const t = offset + k * beat;
+    if (k % 2 === 0) hit(t, (u) => 0.9 * Math.sin(2 * Math.PI * (50 + 90 * Math.exp(-u * 40)) * u) * Math.exp(-u * 20));
+    else hit(t, (u) => (0.4 * (rnd() - 0.5) + 0.2 * Math.sin(2 * Math.PI * 190 * u)) * Math.exp(-u * 25));
+    hit(t, (u) => 0.15 * (rnd() - 0.5) * Math.exp(-u * 90));
+    hit(t + beat / 2, (u) => 0.12 * (rnd() - 0.5) * Math.exp(-u * 90));
+  }
+  const wav = Buffer.alloc(44 + x.length * 2);
+  wav.write('RIFF', 0); wav.writeUInt32LE(36 + x.length * 2, 4); wav.write('WAVEfmt ', 8);
+  wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22); wav.writeUInt32LE(sr, 24);
+  wav.writeUInt32LE(sr * 2, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34); wav.write('data', 36); wav.writeUInt32LE(x.length * 2, 40);
+  for (let i = 0; i < x.length; i++) wav.writeInt16LE(Math.round(Math.max(-1, Math.min(1, x[i] * 0.8)) * 32767), 44 + i * 2);
+
+  const { page, errors } = await openPage({ width: 1280, height: 800 });
+  check('song: panel hidden before choosing', await page.evaluate(() => document.querySelector('#song-panel').hidden && document.querySelector('#song-clear').hidden));
+  await page.setInputFiles('#song-file', { name: 'test-beat.wav', mimeType: 'audio/wav', buffer: wav });
+  await page.waitForFunction(() => window.__hg.song.cur, null, { timeout: 60000 });
+  const got = await page.evaluate(() => {
+    const s = window.__hg.song.cur;
+    return { name: s.name, duration: s.duration, grid: s.grid, source: s.source, bpmField: document.querySelector('#song-bpm').value, panel: !document.querySelector('#song-panel').hidden, hint: document.querySelector('#song-hint').textContent };
+  });
+  const phaseErr = (first) => { const d = (((first - offset) % beat) + beat * 1.5) % beat - beat / 2; return Math.abs(d); };
+  const downErr = (g) => { const bar = beat * 4, d = (((g.first + g.bar * g.beat - offset) % bar) + bar * 1.5) % bar - bar / 2; return Math.abs(d); };
+  check('song: BPM estimated within ±1', Math.abs(got.grid.bpm - bpm) < 1, got.grid.bpm.toFixed(2));
+  check('song: beat position within 30ms', phaseErr(got.grid.first) < 0.03, (phaseErr(got.grid.first) * 1000).toFixed(1) + 'ms');
+  check('song: downbeat found', downErr(got.grid) < 0.03, JSON.stringify(got.grid));
+  check('song: UI shows name, BPM and duration', got.panel && got.name === 'test-beat.wav' && got.bpmField === got.grid.bpm.toFixed(1) && Math.abs(got.duration - secs) < 0.1 && got.hint.includes('BPM') && got.source === 'auto', JSON.stringify(got));
+  // 倍・半分・入力・小節の頭・自動に戻す
+  await page.click('#song-half');
+  const half = await page.evaluate(() => window.__hg.song.cur.grid.bpm);
+  await page.click('#song-double');
+  const dbl = await page.evaluate(() => window.__hg.song.cur.grid.bpm);
+  await page.click('#song-double'); // 240 を超えるので変わらない
+  const capped = await page.evaluate(() => window.__hg.song.cur.grid.bpm);
+  await page.fill('#song-bpm', '130');
+  await page.press('#song-bpm', 'Enter');
+  const typed = await page.evaluate(() => ({ bpm: window.__hg.song.cur.grid.bpm, source: window.__hg.song.cur.source }));
+  check('song: ÷2 / ×2 / typed BPM', Math.abs(half - got.grid.bpm / 2) < 1e-6 && Math.abs(dbl - got.grid.bpm) < 1e-6 && capped === dbl && typed.bpm === 130 && typed.source === 'manual', `${half} ${dbl} ${capped} ${JSON.stringify(typed)}`);
+  await page.click('#song-bar-next');
+  const shifted = await page.evaluate(() => window.__hg.song.cur.grid.bar);
+  check('song: shift downbeat', shifted === (got.grid.bar + 1) % 4, `${got.grid.bar}→${shifted}`);
+  await page.click('#song-reset');
+  check('song: reset to estimate', await page.evaluate((g) => JSON.stringify(window.__hg.song.cur.grid) === JSON.stringify(g) && window.__hg.song.cur.source === 'auto' && document.querySelector('#song-reset').disabled, got.grid));
+  // タップ: 推定に近い間隔なら間隔は推定のまま、位置と倍・半分だけ直る
+  const taps = await page.evaluate(async ({ beat, offset }) => {
+    const m = await import('./src/music.js');
+    const g = { bpm: 62, beat: 60 / 62, first: 0.2, bar: 0 }; // 半分・位置違いで推定を間違えた想定
+    const t = [8, 9, 10, 11, 12, 13].map((k) => offset + k * beat + (k % 2 ? 0.012 : -0.012));
+    return { fixed: m.applyTaps(g, t), raw: m.tempoFromTaps(t), few: m.applyTaps(g, t.slice(0, 3)) };
+  }, { beat, offset });
+  check('song: taps fix octave and phase', Math.abs(taps.fixed.bpm - 124) < 1e-6 && phaseErr(taps.fixed.first) < 0.005 && Math.abs(taps.raw.bpm - bpm) < 2 && taps.few === null, JSON.stringify(taps));
+  // 試聴: 再生で拍の丸が動き、映像を再生すると止まる
+  await page.click('#song-play');
+  const playing = await page.waitForFunction(() => document.querySelector('#song-field').classList.contains('playing'), null, { timeout: 10000 }).then(() => true, () => false);
+  if (playing) {
+    await page.waitForTimeout(600);
+    check('song: preview runs', await page.evaluate(() => document.querySelector('#song-time').textContent.startsWith('0:0') && [...document.querySelectorAll('#song-lamp i')].some((i) => i.style.opacity !== '')));
+    await page.click('#song-play');
+    check('song: preview stops', await page.evaluate(() => !document.querySelector('#song-field').classList.contains('playing')));
+  } else {
+    console.log('(song preview skipped: audio playback unavailable in this browser)');
+  }
+  // 保存と復元: 読み込み直すと曲と手直しが戻る（解析し直さない）
+  await page.click('#song-bar-prev');
+  const saved = await page.evaluate(() => JSON.stringify(window.__hg.song.cur.grid));
+  await page.waitForTimeout(1200);
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.waitForFunction(() => window.__hg.song.cur, null, { timeout: 30000 });
+  const restored = await page.evaluate(() => ({ grid: JSON.stringify(window.__hg.song.cur.grid), name: window.__hg.song.cur.name, source: window.__hg.song.cur.source, size: window.__hg.song.cur.blob.size }));
+  check('song: restored after reload', restored.grid === saved && restored.name === 'test-beat.wav' && restored.source === 'manual' && restored.size === wav.length, JSON.stringify(restored));
+  await page.evaluate(() => { document.querySelector('#song-field').scrollIntoView(); });
+  await page.screenshot({ path: join(outDir, 'song-field.png') });
+  // 外す: 保存からも消える
+  await page.click('#song-clear');
+  await page.waitForTimeout(1200);
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.waitForTimeout(1500);
+  check('song: cleared and not restored', await page.evaluate(() => !window.__hg.song.cur && document.querySelector('#song-panel').hidden));
+  // 読めないファイル: 知らせて、状態は変えない
+  await page.setInputFiles('#song-file', { name: 'broken.mp3', mimeType: 'audio/mpeg', buffer: Buffer.from('not audio at all') });
+  await page.waitForFunction(() => document.querySelector('#toast').classList.contains('show'), null, { timeout: 20000 });
+  check('song: unreadable file shows message', await page.evaluate(() => !window.__hg.song.cur && document.querySelector('#toast').textContent.includes('読み込めません')));
+  check('no page errors (song)', errors.length === 0, errors.join('\n'));
+  await page.close();
+}
+
 // ---- 6. トップ: 作例動画・ロゴ・ボタン
 for (const [name, vp, file] of [['desktop', { width: 1440, height: 900 }, 'hero-16x9'], ['phone', { width: 390, height: 844 }, 'hero-9x16']]) {
   const { page, errors } = await openPage(vp);

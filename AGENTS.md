@@ -37,6 +37,9 @@ src/analyze.js      … 注目点検出（顕著性マップ）とパレット�
 src/focal-editor.js … 注目点エディタ
 src/export.js       … 1 コマずつの書き出し（WebCodecs → MP4。音声を入れる仕組みもあるが v1.0.0 では使っていない）
 src/store.js        … 作業の保存（IndexedDB）
+src/music.js        … 曲の解析（テンポ・拍・小節の頭の推定、タップでの補正。decodeSong 以外は DOM を使わず Node でも動く）
+src/music-worker.js … 曲の解析を Worker で動かす入口
+src/song.js         … 曲の欄の UI（選ぶ・試聴・手直し・保存）
 src/version.js      … バージョン・ビルド情報・プレビュー判定・保存キー
 src/text.js         … 文字のテクスチャ化
 src/ease.js         … イージング（タメツメ用の cubic-bezier / 予備動作付き加速など）
