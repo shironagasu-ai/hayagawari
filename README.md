@@ -22,7 +22,7 @@
 
 設定値は閉じても保持され、開けば戻ります。開閉状態はブラウザに記憶されます。
 
-1. イラストをドロップ（または「サンプルで試す」）
+1. イラストをドロップ（または「サンプルで試す」。10 点のサンプルから毎回 6〜8 点をランダムに読み込む。サンプルの注目点は見本として手で決めてある）
 2. サムネイルの丸が自動検出した注目点（番号＝優先順、1番が一番見せたい箇所）。サムネイルをクリックすると注目点エディタが開き、移動・追加・削除・優先順・寄りの範囲を編集できる。カードのドラッグで並べ替え
 3. 名前・比率（16:9 / 9:16 / 1:1）・テンポ・スタイル・オープニング・エンディング・シードを選んで「▶ 映像を生成して再生」
 4. 🎲（または R キー）で別バージョン。気に入ったら「⤓ 書き出し」で MP4 を保存
@@ -61,6 +61,12 @@
 
 シード・比率・スタイル等は URL の `#` 以降に入るので、同じ画像を使えば同じ映像を再現できます。
 
+## 演出カタログ
+
+ページ下部の「演出カタログ」（`#catalog`）で、オープニング・エンディング・見せ方・切り替え・背景の飾り・配色・スタイルを、同じサンプル作品で 1 つずつ見比べられる。一覧のまま、画面の中央に一番近いカード（PC ではマウスを乗せたカード）がその場で再生され、ほかの見えているカードは保存した 6 コマをコマ送りで切り替える（同時に本当に描くのは 1 枚だけなので、スマホでも軽い）。「▶ 全画面で再生」でその演出だけの短い映像を大きく流す。PR のプレビューでも使える（新しい演出の確認用）。
+
+演出の実装は `src/fx/` にカテゴリごとに分かれている（`openers.js` / `closers.js` / `variants.js` / `transitions.js` / `decors.js` / `palettes.js` / `themes.js`）。表示名と説明は `src/fx/labels.js`。
+
 ## 仕組み
 
 ```
@@ -70,15 +76,16 @@ src/export.js    … 1コマずつの書き出し（WebCodecs → MP4、映像�
 src/audio.js     … 効果音とビートの合成・楽譜・プレビュー再生
 vendor/          … 同梱ライブラリ（mp4-muxer 5.2.2・MIT）
 src/analyze.js   … 注目点検出（顕著性マップ）とパレット抽出
-src/director.js  … シードから映像の設計図を作り、時刻 t の絵を描く（テーマ・振付・背景装飾・トランジション）
-src/bookends.js  … オープニング / エンディングのパターン
-src/kit.js       … 演出共通の部品（配色・注目点・画像カメラ・文字配置・レイアウト）
+src/director.js  … シードから映像の設計図を作り、時刻 t の絵を描く（演出の抽選・つなぎ・HUD）
+src/fx/          … 演出そのもの（themes / openers / closers / variants / transitions / decors / palettes、表示名は labels）
+src/catalog.js   … 演出カタログ（#catalog）
+src/kit.js       … 演出共通の部品（注目点・画像カメラ・文字配置・レイアウト）
 src/focal-editor.js … 注目点エディタ
 src/gl.js        … WebGL2 レンダラー（マスク・方向ブラー・トランジション合成・ポスト）
 src/text.js      … 文字のテクスチャ化
 src/ease.js      … イージング（タメツメ用の cubic-bezier / 予備動作付き加速など）
 src/rng.js       … シード付き乱数
-src/samples.js   … サンプル用のプロシージャル・イラスト
+src/samples.js   … サンプル画像（assets/samples/）の一覧・タイトル・注目点、ランダムに選ぶ処理
 tests/e2e.mjs    … Playwright による E2E テスト
 ```
 
@@ -103,6 +110,15 @@ tests/e2e.mjs    … Playwright による E2E テスト
 1. PR で `src/version.js` の `VERSION`・`package.json` の `version`（`npm version X.Y.Z --no-git-tag-version` で lock も一緒に更新）・`CHANGELOG.md`（`## [Unreleased]` の中身を `## [X.Y.Z] - 日付` に移す）をそろえる。CI の「Version check」で一致を確認する
 2. main にマージすると、テスト → Pages 公開 → **タグ `vX.Y.Z` と GitHub Release の作成**（本文は CHANGELOG の該当の節）まで自動で行う。バージョンを上げていないマージでは公開だけ行い、リリースは作らない
 3. サイトではトップの「PORTFOLIO MOTION GENERATOR」の横と、ページ下部に `vX.Y.Z ・ コミット ・ 日付` を表示する（コミットと日付は公開時に CI が書き込む。ローカルでは「開発版」）
+
+**大きな版（統合ブランチ）**
+
+v1.0.0 のように複数の PR にまたがる版は、途中の状態を本番に出さないよう統合ブランチ（例: `release/v1.0.0`）に集めてから main へ入れる。
+
+- 各機能の PR は統合ブランチ向けに作る（CI と PR のプレビューは宛先に関係なく動く）
+- 統合ブランチ → main の PR を下書きで開いておき、そのプレビューで全体を確認する
+- 本番の不具合は main に直接直して PATCH で出し、統合ブランチにも取り込む
+- 最後の PR でバージョンを上げ、統合ブランチの PR を main にマージするとリリースされる
 
 ## 自動テストと公開（GitHub Actions）
 
@@ -151,7 +167,9 @@ npm ci && npm test              # E2E（Chromium は CHROMIUM_PATH で指定可�
 
 ## ライセンス / クレジット
 
-MIT
+MIT（ソースコード）
+
+**サンプル画像・作例は MIT の対象外です。** `assets/samples/`・`assets/hero/`・`docs/media/preview.webp` のイラストは作者が権利を保持しており（All rights reserved）、HAYAGAWARI のデモとして表示するためだけに置いています。複製・再配布・ほかでの利用はできません。フォークして公開するときは削除するか差し替えてください（詳細は [`assets/samples/NOTICE.md`](assets/samples/NOTICE.md)）。
 
 ロゴ書体: [Archivo](https://github.com/Omnibus-Type/Archivo)（SIL Open Font License 1.1, © The Archivo Project Authors）をロゴの 7 文字だけに絞って `assets/fonts/archivo-logo.woff2` に同梱（約 4KB）。ライセンス文は `assets/fonts/ARCHIVO-OFL.txt`
 

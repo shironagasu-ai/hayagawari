@@ -12,7 +12,7 @@ try { ({ chromium } = await import('playwright-core')); } catch { ({ chromium } 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const outDir = join(root, 'tests', 'output');
 mkdirSync(outDir, { recursive: true });
-const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.jpg': 'image/jpeg', '.mp4': 'video/mp4', '.woff2': 'font/woff2' };
+const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.jpg': 'image/jpeg', '.mp4': 'video/mp4', '.woff2': 'font/woff2', '.webp': 'image/webp' };
 const server = createServer((req, res) => {
   // /pr/<N>/ は PR プレビューの公開場所を模したもの（中身は同じ）
   let p = join(root, decodeURIComponent(req.url.split('?')[0].split('#')[0]).replace(/^\/pr\/\d+\//, '/'));
@@ -101,10 +101,32 @@ async function sheet(page, file, rows) {
   await page.waitForFunction(() => window.__hg.state.works.length === 6, null, { timeout: 30000 });
   const focal = await page.evaluate(() => window.__hg.state.works.map((w) => ({ name: w.name, f: w.focal.map((p) => [+p.x.toFixed(2), +p.y.toFixed(2), +p.size.toFixed(2)]) })));
   console.log('focal points:', JSON.stringify(focal));
-  // 顔サンプルは目（y≈0.43, x≈0.41/0.59）付近を検出してほしい
-  const face = focal.find((w) => w.name === 'Aqua Gaze');
-  const nearEyes = face.f.some(([x, y]) => Math.abs(y - 0.44) < 0.12 && Math.abs(x - 0.5) < 0.2);
-  check('portrait sample: focal near eyes', nearEyes);
+  // サンプルは手で決めた注目点で読み込まれる（Ranunculus の 1 番は顔）
+  const ranun = focal.find((w) => w.name === 'Ranunculus');
+  check('sample uses its preset focal points', ranun && Math.abs(ranun.f[0][0] - 0.6) < 0.01 && Math.abs(ranun.f[0][1] - 0.3) < 0.01, JSON.stringify(ranun));
+  // 自動検出（解析）そのもの: Ranunculus の花（x≈0.75, y≈0.42）を拾う
+  const auto = await page.evaluate(() => window.__hg.state.works.find((w) => w.name === 'Ranunculus').autoFocal.map((p) => [p.x, p.y]));
+  check('auto focal finds the flower in Ranunculus', auto.some(([x, y]) => Math.abs(x - 0.75) < 0.1 && Math.abs(y - 0.42) < 0.1), JSON.stringify(auto));
+  // 全サンプルの画像が読めて、ランダムの組は 6〜8 点・重複なし
+  const smp = await page.evaluate(async () => {
+    const { SAMPLES, pickSamples } = window.__hg.samples;
+    const bad = [];
+    for (const x of SAMPLES) {
+      const r = await fetch(`assets/samples/${x.file}.webp`);
+      try { if (!r.ok) throw new Error(r.status); await createImageBitmap(await r.blob()); } catch (e) { bad.push(`${x.file}: ${e.message}`); }
+      if (!x.title || x.focal.length < 1) bad.push(`${x.file}: no title/focal`);
+    }
+    const sizes = new Set();
+    let dup = 0;
+    for (let i = 0; i < 100; i++) {
+      const l = pickSamples(`t${i}`);
+      sizes.add(l.length);
+      if (new Set(l.map((x) => x.file)).size !== l.length) dup++;
+    }
+    return { n: SAMPLES.length, bad, sizes: [...sizes].sort(), dup };
+  });
+  check('every sample image loads', smp.bad.length === 0 && smp.n >= 8, JSON.stringify(smp.bad));
+  check('random sample set is 6-8 distinct works', JSON.stringify(smp.sizes) === '[6,7,8]' && smp.dup === 0, JSON.stringify(smp));
 
   await page.click('#go');
   await page.waitForTimeout(300);
@@ -176,9 +198,10 @@ async function sheet(page, file, rows) {
   }
   // オープニング / エンディング / 振付を全種描いて確認
   const T = [0.08, 0.2, 0.35, 0.5, 0.65, 0.8, 0.95];
-  const opKeys = ['montage', 'type', 'shutter', 'countdown', 'knockout', 'slice', 'tunnel', 'boot'];
-  const clKeys = ['grid', 'filmstrip', 'stack', 'knockout', 'orbit', 'curtain', 'rewind'];
-  const vKeys = await page.evaluate(async () => (await import('/src/director.js')).VARIANT_KEYS());
+  // 演出の一覧はカタログと同じ登録元から取る（演出を足してもテストを書き換えずに済む）
+  const opKeys = await page.evaluate(() => window.__hg.fx.catalogKeys('opener'));
+  const clKeys = await page.evaluate(() => window.__hg.fx.catalogKeys('closer'));
+  const vKeys = await page.evaluate(() => window.__hg.fx.catalogKeys('variant'));
   await page.evaluate(() => { window.__hg.setOpt('style', 'NOIR'); window.__hg.setSeed('COVER-01'); });
   await sheet(page, 'sheet-openers.png', opKeys.map((k) => ({ key: 'opener', value: k, seg: 0, times: T })));
   await sheet(page, 'sheet-closers.png', clKeys.map((k) => ({ key: 'closer', value: k, seg: 'last', times: T })));
@@ -189,7 +212,7 @@ async function sheet(page, file, rows) {
 
   // スタイル: 全9種とミックス（作品ごとに抽選・連続しない）
   const styleKeys = await page.evaluate(async () => (await import('/src/director.js')).STYLE_KEYS());
-  check('9 styles', styleKeys.length === 9, styleKeys.join(','));
+  check('at least 9 styles', styleKeys.length >= 9, styleKeys.join(','));
   await page.evaluate(() => window.__hg.setOpt('opener', 'auto'));
   await sheet(page, 'sheet-styles.png', styleKeys.map((k) => ({ key: 'style', value: k, seg: 1, times: [0.15, 0.45, 0.75, 0.95] })));
   const mix = await page.evaluate(() => {
@@ -205,7 +228,7 @@ async function sheet(page, file, rows) {
   const autoSub = await page.evaluate(() => {
     document.querySelector('#artist').value = 'SOMEONE'; document.querySelector('#subline').value = '';
     const bad = [];
-    for (const op of ['montage', 'type', 'shutter', 'countdown', 'knockout', 'slice', 'tunnel', 'boot']) {
+    for (const op of window.__hg.fx.catalogKeys('opener')) {
       window.__hg.setOpt('opener', op); window.__hg.setOpt('style', 'NOIR'); window.__hg.build();
       for (const k of window.__hg.tf.cache.keys()) if (/PORTFOLIO|SELECTED WORKS/.test(k.split('|')[0])) bad.push(op + ':' + k.split('|')[0]);
     }
@@ -218,7 +241,8 @@ async function sheet(page, file, rows) {
   const seen = await page.evaluate(() => {
     window.__hg.setOpt('opener', 'auto'); window.__hg.setOpt('closer', 'auto'); window.__hg.setOpt('variant', null);
     const o = new Set(), c = new Set(), v = new Set(), tr = new Set();
-    for (let i = 0; i < 60; i++) {
+    // 候補が増えても取りこぼさないよう多めに（16 種を 200 回なら、1 種でも出ない確率は 1e-4 程度）
+    for (let i = 0; i < 200; i++) {
       window.__hg.setSeed('S' + i); window.__hg.setOpt('style', 'auto'); window.__hg.build();
       const f = window.__hg.state.film;
       o.add(f.opener); c.add(f.closer);
@@ -555,6 +579,77 @@ async function sheet(page, file, rows) {
   await page.close();
 }
 
+// ---- 9. 全カテゴリの全演出: それぞれの見本の映像が描けて（真っ黒・単色にならず）、説明があり、描画命令が多すぎない
+{
+  const { page, errors } = await openPage({ width: 1280, height: 800 }, '#catalog');
+  const res = await page.evaluate(async () => {
+    const { CATEGORIES, catalogKeys, catalogFilm, labelOf, loadWorks, TextFactory } = window.__hg.fx;
+    const r = window.__hg.renderer;
+    const works = await loadWorks();
+    const tf = new TextFactory(r);
+    const c = document.createElement('canvas'); c.width = 64; c.height = 36;
+    const g = c.getContext('2d', { willReadFrequently: true });
+    const out = [];
+    for (const { key: cat } of CATEGORIES) {
+      for (const key of catalogKeys(cat)) {
+        tf.dispose();
+        const { film, win } = catalogFilm(cat, key, works, tf);
+        r.setSize(1920, 1080, 320, 180);
+        let flat = 0, maxDraws = 0;
+        for (let i = 0; i < 5; i++) {
+          film.render(r, win[0] + (win[1] - win[0]) * ((i + 0.5) / 5));
+          maxDraws = Math.max(maxDraws, r.drawCalls);
+          g.drawImage(r.canvas, 0, 0, 64, 36);
+          const d = g.getImageData(0, 0, 64, 36).data;
+          let s1 = 0, s2 = 0;
+          for (let k = 0; k < d.length; k += 4) { const v = (d[k] + d[k + 1] + d[k + 2]) / 3; s1 += v; s2 += v * v; }
+          const n = d.length / 4, m = s1 / n;
+          if (Math.sqrt(Math.max(0, s2 / n - m * m)) < 2) flat++;
+        }
+        out.push({ cat, key, flat, maxDraws, desc: labelOf(cat, key)[1] });
+      }
+    }
+    return out;
+  });
+  const byCat = {};
+  for (const x of res) (byCat[x.cat] = byCat[x.cat] || []).push(x.key);
+  console.log('catalog:', Object.entries(byCat).map(([c, k]) => `${c}=${k.length}`).join(' '), '| max draws', Math.max(...res.map((x) => x.maxDraws)));
+  const flat = res.filter((x) => x.flat > 1);
+  check('every effect renders (not flat)', flat.length === 0, flat.map((x) => `${x.cat}:${x.key}(${x.flat}/5)`).join(', '));
+  const noDesc = res.filter((x) => !x.desc);
+  check('every effect has a label and description', noDesc.length === 0, noDesc.map((x) => `${x.cat}:${x.key}`).join(', '));
+  const heavy = res.filter((x) => x.maxDraws > 600);
+  check('no effect exceeds the draw-call budget (600)', heavy.length === 0, heavy.map((x) => `${x.cat}:${x.key}=${x.maxDraws}`).join(', '));
+  // カタログのページ: タブとカードが出て、見えているカードのコマ見本が描かれる
+  await page.waitForFunction(() => document.querySelectorAll('.cat-card.ready').length >= 2, null, { timeout: 120000 });
+  const ui = await page.evaluate(() => ({ tabs: document.querySelectorAll('#cat-tabs button').length, cards: document.querySelectorAll('.cat-card').length, first: window.__hg.fx.catalogKeys('opener').length }));
+  check('catalog page lists every opener', ui.tabs === 7 && ui.cards === ui.first, JSON.stringify(ui));
+  // 一覧のまま、画面中央のカードがその場で再生される（コマが変わっていく）
+  await page.waitForFunction(() => document.querySelector('.cat-card.live'), null, { timeout: 60000 });
+  const liveMoves = await page.evaluate(async () => {
+    const cv = document.querySelector('.cat-card.live canvas');
+    const snap = () => { const c = document.createElement('canvas'); c.width = 32; c.height = 18; const g = c.getContext('2d'); g.drawImage(cv, 0, 0, 32, 18); return g.getImageData(0, 0, 32, 18).data; };
+    const a = snap();
+    await new Promise((r) => setTimeout(r, 700));
+    const b = snap();
+    let d = 0;
+    for (let i = 0; i < a.length; i++) d += Math.abs(a[i] - b[i]);
+    return d / a.length;
+  });
+  check('catalog card plays inline', liveMoves > 0.5, liveMoves.toFixed(2));
+  await page.click('#cat-tabs button[data-v="transition"]');
+  await page.waitForFunction(() => location.hash === '#catalog=transition' && document.querySelectorAll('.cat-card[data-cat="transition"]').length > 0);
+  // 見本を再生 → 戻るとカタログに戻り、本編の映像は作り直される
+  await page.click('.cat-card .cat-play');
+  await page.waitForFunction(() => document.body.classList.contains('playing') && window.__hg.state.catalogFilm);
+  await page.waitForTimeout(400);
+  await page.evaluate(() => window.__hg.toEditor());
+  check('catalog playback returns to catalog', await page.evaluate(() => !document.querySelector('#catalog').hidden && !window.__hg.state.film && !window.__hg.state.catalogFilm));
+  await page.screenshot({ path: join(outDir, 'catalog.png') });
+  check('no page errors (catalog)', errors.length === 0, errors.join('\n'));
+  await page.close();
+}
+
 // ---- 10. プレーヤーから戻る（スマホ）: 左上の「戻る」が常に出る／隠れている操作は最初のタップで出すだけ／ブラウザの戻るでも閉じる
 {
   // スマホ相当（タッチ）。マウスと違い、タップの前に「動かした」イベントが来ない
@@ -618,21 +713,22 @@ for (const [name, vp, file] of [['desktop', { width: 1440, height: 900 }, 'hero-
     await page.waitForFunction(() => document.querySelector('#hero-video').currentTime > 0.5, null, { timeout: 30000 });
     check(`hero video plays (${name})`, true);
     await page.click('#hero-sample');
-    await page.waitForFunction(() => window.__hg.state.works.length === 6, null, { timeout: 30000 });
+    await page.waitForFunction(() => window.__hg.state.works.length >= 6 && !document.body.classList.contains('busy'), null, { timeout: 30000 });
     await page.click('#go');
     await page.waitForTimeout(500);
     check(`hero video pauses during playback (${name})`, await page.evaluate(() => document.querySelector('#hero-video').paused));
   } else {
     console.log(`(hero video playback skipped: no H.264 in this browser)`);
     await page.click('#hero-sample');
-    await page.waitForFunction(() => window.__hg.state.works.length === 6, null, { timeout: 30000 });
+    await page.waitForFunction(() => window.__hg.state.works.length >= 6 && !document.body.classList.contains('busy'), null, { timeout: 30000 });
   }
   if (name === 'desktop') {
     const pkgVersion = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version;
     const ver = await page.evaluate(() => ({ kicker: document.querySelector('#ver-kicker').textContent, footer: document.querySelector('#ver').textContent, v: window.__hg.version }));
     check('version shown on site', ver.v === pkgVersion && ver.kicker === `v${pkgVersion}` && ver.footer.includes(`v${pkgVersion}`) && ver.footer.includes('更新履歴'), JSON.stringify(ver));
   }
-  check(`hero sample button loads samples (${name})`, await page.evaluate(() => window.__hg.state.works.length === 6));
+  const nHero = await page.evaluate(() => window.__hg.state.works.length);
+  check(`hero sample button loads 6-8 random samples (${name})`, nHero >= 6 && nHero <= 8, String(nHero));
   await page.evaluate(() => { document.querySelector('#editor').scrollTop = 0; });
   await page.screenshot({ path: join(outDir, `hero-${name}.png`) });
   check(`no page errors (hero ${name})`, errors.length === 0, errors.join('\n'));

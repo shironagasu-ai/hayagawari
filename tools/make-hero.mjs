@@ -28,7 +28,7 @@ const images = args.images
   ? readdirSync(args.images).filter((f) => /\.(png|jpe?g|webp)$/i.test(f)).sort().map((f) => resolve(args.images, f))
   : null;
 
-const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript' };
+const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.webp': 'image/webp' };
 const server = createServer((req, res) => {
   let p = join(root, decodeURIComponent(req.url.split('?')[0].split('#')[0]));
   if (existsSync(p) && statSync(p).isDirectory()) p = join(p, 'index.html');
