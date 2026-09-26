@@ -5,9 +5,9 @@
 
 ## [Unreleased]
 
-## [1.0.0] - 2026-09-26
+## [0.9.0] - 2026-09-26
 
-公開版。トップページを作り直し、作業を保存できるようにしました。
+1.0 に向けた準備版。トップページを作り直し、作業を保存できるようにしました（1.0.0 は演出を増やす次の版で出す予定）。
 
 ### 追加
 - トップに作例動画（イラスト 9 作品を HAYAGAWARI で映像化したもの）を背景ループで表示。縦長の画面では縦動画
@@ -64,5 +64,5 @@
 ### 追加
 - 最初の版：イラストの注目点を解析し、シードごとに違う演出のポートフォリオ映像を生成（#1）
 
-[Unreleased]: https://github.com/shironagasu-ai/hayagawari/compare/v1.0.0...HEAD
-[1.0.0]: https://github.com/shironagasu-ai/hayagawari/releases/tag/v1.0.0
+[Unreleased]: https://github.com/shironagasu-ai/hayagawari/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/shironagasu-ai/hayagawari/releases/tag/v0.9.0
