@@ -212,8 +212,20 @@ async function sheet(page, file, rows) {
   await page.evaluate(() => { window.__hg.setOpt('aspect', '9:16'); window.__hg.resize(); });
   await sheet(page, 'sheet-openers-9x16.png', opKeys.map((k) => ({ key: 'opener', value: k, seg: 0, times: T })));
   await sheet(page, 'sheet-closers-9x16.png', clKeys.map((k) => ({ key: 'closer', value: k, seg: 'last', times: T })));
+  await sheet(page, 'sheet-variants-9x16.png', vKeys.map((k) => ({ key: 'variant', value: k, seg: 1, times: T })));
   await page.evaluate(() => { window.__hg.setOpt('aspect', '16:9'); window.__hg.resize(); });
   check('9 choreographies available', vKeys.length >= 9, vKeys.join(','));
+  // おまかせで出うるか: 見せ方・切り替え・背景の飾りは、どれか 1 つ以上のスタイルで重みが付いていること
+  const unreachable = await page.evaluate(async () => {
+    const { THEMES } = await import('/src/fx/themes.js');
+    const { catalogKeys } = window.__hg.fx;
+    const out = [];
+    for (const [cat, field] of [['variant', 'variants'], ['transition', 'trans'], ['decor', 'decor']]) {
+      for (const k of catalogKeys(cat)) if (!Object.values(THEMES).some((th) => (th[field][k] || 0) > 0)) out.push(`${cat}:${k}`);
+    }
+    return out;
+  });
+  check('every variant / transition / decor can be picked automatically', unreachable.length === 0, unreachable.join(', '));
 
   // スタイル: 全9種とミックス（作品ごとに抽選・連続しない）
   const styleKeys = await page.evaluate(async () => (await import('/src/director.js')).STYLE_KEYS());
