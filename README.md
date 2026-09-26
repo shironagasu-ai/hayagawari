@@ -8,9 +8,9 @@
 イラストを複数枚アップロードすると、**注目点（目を引く箇所）を解析**して、キビキビ動くモーショングラフィックのポートフォリオ映像を自動生成する Web サービスです。
 **シードごとに振付・トランジション・配色・テンポが変わる**ので、使う人・押すたびに違う映像になります。
 
-- ビルド不要・静的ファイルのみ（GitHub Pages でそのまま動く）・外部 CDN 非依存（ライブラリは `vendor/` にバージョン固定で同梱）
-- 画像はブラウザ内で処理し、どこにも送信しない
-- WebGL2 の自前レンダラーで 60fps 前提（1フレームの JS 側コストは約 0.3〜0.5ms、描画は数十ドローコール＋フルスクリーン 3 パス）
+- 登録やインストールは不要。ブラウザで開くだけで使える
+- **画像はブラウザ内で処理し、どこにも送信しない**
+- 60fps のなめらかな再生と、MP4 での書き出し（1080p / 4K）
 
 ## 使い方
 
@@ -55,7 +55,7 @@
 | R | 別バージョン（新しいシード） |
 | ← → | 前 / 次の作品へ |
 | F | 全画面 |
-| E | 編集に戻る |
+| E | 作る画面に戻る（左上の「← 戻る」と同じ） |
 | M | 音の切り替え（ビート＋効果音 / 効果音のみ / なし） |
 | P | パフォーマンス表示（FPS・描画コスト） |
 
@@ -63,107 +63,17 @@
 
 ## 演出カタログ
 
-ページ下部の「演出カタログ」（`#catalog`）で、オープニング・エンディング・見せ方・切り替え・背景の飾り・配色・スタイルを、同じサンプル作品で 1 つずつ見比べられる。一覧のまま、画面の中央に一番近いカード（PC ではマウスを乗せたカード）がその場で再生され、ほかの見えているカードは保存した 6 コマをコマ送りで切り替える（同時に本当に描くのは 1 枚だけなので、スマホでも軽い）。「▶ 全画面で再生」でその演出だけの短い映像を大きく流す。PR のプレビューでも使える（新しい演出の確認用）。
+ページ下部の「演出カタログ」（`#catalog`）で、オープニング・エンディング・見せ方・切り替え・背景の飾り・配色・スタイルを、同じサンプル作品で 1 つずつ見比べられる。一覧のまま、画面の中央に一番近いカード（PC ではマウスを乗せたカード）がその場で再生され、ほかの見えているカードはコマ送りで動く。「▶ 全画面で再生」でその演出だけの短い映像を大きく流す。
 
-演出の実装は `src/fx/` にカテゴリごとに分かれている（`openers.js` / `closers.js` / `variants.js` / `transitions.js` / `decors.js` / `palettes.js` / `themes.js`）。表示名と説明は `src/fx/labels.js`。
+## バージョン
 
-## 仕組み
+サイトのトップとページ下部に、いまのバージョン（例: `v0.9.1`）を表示しています。各版の変更点は [CHANGELOG.md](CHANGELOG.md) と [Releases](https://github.com/shironagasu-ai/hayagawari/releases) にあります。
 
-```
-index.html       … UI（編集画面・プレイヤー）
-src/main.js      … UI 配線・メインループ・書き出しダイアログ
-src/export.js    … 1コマずつの書き出し（WebCodecs → MP4、映像＋音声）
-src/audio.js     … 効果音とビートの合成・楽譜・プレビュー再生
-vendor/          … 同梱ライブラリ（mp4-muxer 5.2.2・MIT）
-src/analyze.js   … 注目点検出（顕著性マップ）とパレット抽出
-src/director.js  … シードから映像の設計図を作り、時刻 t の絵を描く（演出の抽選・つなぎ・HUD）
-src/fx/          … 演出そのもの（themes / openers / closers / variants / transitions / decors / palettes、表示名は labels）
-src/catalog.js   … 演出カタログ（#catalog）
-src/kit.js       … 演出共通の部品（注目点・画像カメラ・文字配置・レイアウト）
-src/focal-editor.js … 注目点エディタ
-src/gl.js        … WebGL2 レンダラー（マスク・方向ブラー・トランジション合成・ポスト）
-src/text.js      … 文字のテクスチャ化
-src/ease.js      … イージング（タメツメ用の cubic-bezier / 予備動作付き加速など）
-src/rng.js       … シード付き乱数
-src/samples.js   … サンプル画像（assets/samples/）の一覧・タイトル・注目点、ランダムに選ぶ処理
-tests/e2e.mjs    … Playwright による E2E テスト
-```
+**同じシードで同じ映像になるのは、同じバージョンの中だけです。** 演出が増える更新のあとは、共有された URL でも以前と違う映像になることがあります（その場合は CHANGELOG に書きます）。
 
-- **演出はすべて「時刻 → 絵」の純関数**。ランダムな決定は生成時に済ませるので、シーク・ループ・書き出しで結果がぶれない
-- カットは BPM の拍頭に置き、動きは「溜めて（ほぼ静止 or 微速ドリフト）→ 数フレームで詰める → ピタッと止める」で設計
-- 詳細な設計は [docs/design.md](docs/design.md)
+## 開発に参加する
 
-## バージョン管理
-
-[セマンティック バージョニング](https://semver.org/lang/ja/)（`MAJOR.MINOR.PATCH`）。変更の記録は [CHANGELOG.md](CHANGELOG.md)、各版は [Releases](https://github.com/shironagasu-ai/hayagawari/releases)。
-
-| 上げる桁 | いつ | 例 |
-|---|---|---|
-| MAJOR | 保存した作業が読めなくなる・URL の設定の意味が変わる・使い方が大きく変わる | 保存形式の作り直し、設定項目の廃止 |
-| MINOR | 機能・演出・スタイルの追加 | オープニングの追加、新しい設定 |
-| PATCH | 不具合の修正・見た目の微調整 | 表示崩れ、効果音の修正 |
-
-補足: **同じシードで同じ映像になるのは同じバージョンの中だけ**。演出の候補が増える MINOR 以上の更新では、共有された URL でも以前と違う映像になることがある（CHANGELOG に明記する）。
-
-**リリースの手順**
-
-1. PR で `src/version.js` の `VERSION`・`package.json` の `version`（`npm version X.Y.Z --no-git-tag-version` で lock も一緒に更新）・`CHANGELOG.md`（`## [Unreleased]` の中身を `## [X.Y.Z] - 日付` に移す）をそろえる。CI の「Version check」で一致を確認する
-2. main にマージすると、テスト → Pages 公開 → **タグ `vX.Y.Z` と GitHub Release の作成**（本文は CHANGELOG の該当の節）まで自動で行う。バージョンを上げていないマージでは公開だけ行い、リリースは作らない
-3. サイトではトップの「PORTFOLIO MOTION GENERATOR」の横と、ページ下部に `vX.Y.Z ・ コミット ・ 日付` を表示する（コミットと日付は公開時に CI が書き込む。ローカルでは「開発版」）
-
-**大きな版（統合ブランチ）**
-
-v1.0.0 のように複数の PR にまたがる版は、途中の状態を本番に出さないよう統合ブランチ（例: `release/v1.0.0`）に集めてから main へ入れる。
-
-- 各機能の PR は統合ブランチ向けに作る（CI と PR のプレビューは宛先に関係なく動く）
-- 統合ブランチ → main の PR を下書きで開いておき、そのプレビューで全体を確認する
-- 本番の不具合は main に直接直して PATCH で出し、統合ブランチにも取り込む
-- 最後の PR でバージョンを上げ、統合ブランチの PR を main にマージするとリリースされる
-
-## 自動テストと公開（GitHub Actions）
-
-| ワークフロー | いつ | 何を |
-|---|---|---|
-| `ci.yml`（CI） | PR・main へのプッシュ | バージョンの一致確認と E2E テスト（Playwright の Chromium と一般配布の Google Chrome。Chrome では H.264 の書き出しと作例動画の再生も確認）。スクリーンショットと書き出した動画は実行結果の Artifacts から 7 日間ダウンロードできる |
-| `pages.yml`（Pages） | CI が通るたび・PR を閉じたとき | サイト全体を組み立てて GitHub Pages に公開（下記）。main でバージョンが上がっていればタグ `vX.Y.Z` と GitHub Release を作る |
-
-**公開される場所**
-
-- 本番: https://shironagasu-ai.github.io/hayagawari/ … main で**テストが通った最新のコミット**
-- **PR のプレビュー**: `https://shironagasu-ai.github.io/hayagawari/pr/<PR番号>/` … 開いている PR の最新のコミット。**main にマージする前に実機で確認する用**。URL は PR にコメントされる（プッシュのたびに更新）。画面右上に黄色の `PREVIEW ・ PR #番号` が出る
-  - プレビューは本番と同じドメインなので、保存した作業（IndexedDB・localStorage）は名前を分けてあり、本番の作業には触らない
-  - 同じリポジトリのブランチからの PR だけ載せる（フォークからの PR は載せない）。PR を閉じると消える。検索エンジンには載せない（noindex）
-  - PR のコードは Pages の組み立て中に実行しない（ファイルを取り出して置くだけ）
-- `tools/build-pages.sh` が組み立てを行う（公開するのは `index.html` / `src` / `vendor` / `assets` / `LICENSE` のみ）
-- 事前設定: Settings → Pages → Build and deployment → Source を **GitHub Actions** にする（設定済み）
-
-## トップの作例動画
-
-トップ画面の背景で流れる動画は `assets/hero/` にある。縦長の画面では `hero-9x16`、それ以外は `hero-16x9` を使う（各 `.mp4` と、読み込み前・動きを減らす設定用のポスター画像 `.jpg`）。
-
-- HAYAGAWARI 自身の描画から作る。作り直すとき（イラストを差し替えるとき）は:
-
-  ```sh
-  FFMPEG=/path/to/ffmpeg node tools/make-hero.mjs --images ./my-illustrations --name HAYAGAWARI --sub PORTFOLIO --link shironagasu-ai.github.io/hayagawari --seed HERO-01
-  ```
-
-  `--images` を省くと内蔵サンプルで作る。libx264 入りの ffmpeg が必要（`pip install imageio-ffmpeg` で入る静的ビルドでも可）
-- iPhone を含めて自動再生できるよう **H.264・音声なし**。解像度は 1280×720 / 720×1280、9 作品・約 45 秒で 1 本 3.5MB 前後（`--crf` で調整）
-- 画面外・映像の再生中・タブ非表示のときは止める。「動きを減らす」設定ではポスター画像のみ
-- 作例のクレジット表記は `index.html` の `#hero-credit`
-
-README 冒頭のプレビュー（`docs/media/preview.webp`、アニメーション WebP）は横長動画の冒頭 16 秒を 720px・20fps にしたもの。GitHub の README はリポジトリ内の MP4 をその場で再生できないため画像にしている。作り直すとき:
-
-```sh
-ffmpeg -t 16 -i assets/hero/hero-16x9.mp4 -vf "fps=20,scale=720:-1:flags=lanczos" -c:v libwebp_anim -quality 55 -compression_level 6 -loop 0 docs/media/preview.webp
-```
-
-## ローカルで動かす / テスト
-
-```sh
-python3 -m http.server 8000     # → http://localhost:8000/
-npm ci && npm test              # E2E（Chromium は CHROMIUM_PATH で指定可）
-```
+開発の決まりごと・コマンド・構成・リリースの手順は [AGENTS.md](AGENTS.md)、設計の詳細は [docs/design.md](docs/design.md) にあります。
 
 ## ライセンス / クレジット
 
@@ -171,6 +81,6 @@ MIT（ソースコード）
 
 **サンプル画像・作例は MIT の対象外です。** `assets/samples/`・`assets/hero/`・`docs/media/preview.webp` のイラストは作者が権利を保持しており（All rights reserved）、HAYAGAWARI のデモとして表示するためだけに置いています。複製・再配布・ほかでの利用はできません。フォークして公開するときは削除するか差し替えてください（詳細は [`assets/samples/NOTICE.md`](assets/samples/NOTICE.md)）。
 
-ロゴ書体: [Archivo](https://github.com/Omnibus-Type/Archivo)（SIL Open Font License 1.1, © The Archivo Project Authors）をロゴの 7 文字だけに絞って `assets/fonts/archivo-logo.woff2` に同梱（約 4KB）。ライセンス文は `assets/fonts/ARCHIVO-OFL.txt`
+ロゴ書体: [Archivo](https://github.com/Omnibus-Type/Archivo)（SIL Open Font License 1.1, © The Archivo Project Authors）— ライセンス文は `assets/fonts/ARCHIVO-OFL.txt`
 
-同梱ライブラリ: [mp4-muxer](https://github.com/Vanilagy/mp4-muxer) 5.2.2（MIT, © Vanilagy）— ライセンス文は `vendor/MP4-MUXER-LICENSE`。開発は終了しており後継は Mediabunny（MPL-2.0・約 670KB）だが、単一映像トラックの MP4 化には十分で小さい（約 69KB）ためこちらを採用。書き出し時にだけ読み込む
+同梱ライブラリ: [mp4-muxer](https://github.com/Vanilagy/mp4-muxer) 5.2.2（MIT, © Vanilagy）— ライセンス文は `vendor/MP4-MUXER-LICENSE`

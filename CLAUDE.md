@@ -7,4 +7,10 @@
 ## バージョン
 
 - 機能追加・修正の PR では `CHANGELOG.md` の `## [Unreleased]` に変更を書く
-- リリースする PR では `src/version.js`・`package.json`（`npm version X.Y.Z --no-git-tag-version`）・`CHANGELOG.md` をそろえて上げる（決め方は README の「バージョン管理」）。`node tools/check-version.mjs` で確認できる
+- リリースする PR では `src/version.js`・`package.json`（`npm version X.Y.Z --no-git-tag-version`）・`CHANGELOG.md` をそろえて上げる（決め方は AGENTS.md の「バージョン管理」）。`node tools/check-version.mjs` で確認できる
+
+## 開発ガイド
+
+開発の決まりごと・コマンド・構成は AGENTS.md にまとめてある（下の行で読み込む）。
+
+@AGENTS.md
