@@ -117,6 +117,106 @@ export const DECORS = {
       r.draw({ x, y, w: pw, h: ph, mode: 'dots', color: withA(col.deco, 0.85), pat: [period, 0.34, 0, 0], mask: { type: 'blinds', p: e, angle: Math.PI / 2, count: 6, stagger: 0.5 } });
     };
   },
+  // 画面の隅から同心円の波紋が拍に合わせて外へ広がる
+  rings(S) {
+    const { W, H, rng, beat, minDim } = S;
+    const [ux, uy] = rng.pick([[0, 0], [1, 0], [0, 1], [1, 1]]);
+    const cx = ux * W, cy = uy * H;
+    const maxR = Math.hypot(W, H);
+    const gap = minDim * 0.09;
+    const lw = Math.max(1.5, minDim * 0.003);
+    return (r, t, D, col) => {
+      const e = expoOut(prog(t, 0.05, 0.9));
+      const off = ((t / beat) * gap * 0.5) % gap;
+      for (let R = off + gap; R < maxR * e; R += gap) {
+        r.draw({ x: cx, y: cy, w: R * 2, h: R * 2, mode: 'ring', pat: [0, lw, 0, 0], color: withA(col.deco, 0.2) });
+      }
+    };
+  },
+  // 上端を流れる細いテロップ（作品名・番号・年）
+  ticker(S) {
+    const { tf, theme, W, H, work, idx, total, year, minDim } = S;
+    const up = (s) => (theme.upper ? s.toUpperCase() : s);
+    const fs = Math.round(minDim * 0.015);
+    const T = tf.get(`${up(work.title)}   ·   No.${pad2(idx + 1)} / ${pad2(total)}   ·   ${year}   ·   `, { family: 'mono', size: fs, weight: 600, tracking: 0.2 });
+    const tw = Math.max(1, textW(T));
+    const y = minDim * 0.11;
+    const bh = fs * 2.2;
+    return (r, t, D, col) => {
+      const e = expoOut(prog(t, 0.05, 0.6));
+      r.draw({ x: W / 2, y, w: W, h: bh, color: withA(col.ink, 0.07), mask: { type: 'wipe', p: e, angle: 0 } });
+      const off = -((t * minDim * 0.09) % tw);
+      for (let x = off; x < W; x += tw) drawText(r, T, x, y - textH(T) / 2, { color: withA(col.ink, 0.5), reveal: e });
+    };
+  },
+  // 大きな幾何学図形（円・リング・四角）がゆっくり漂う
+  shapes(S) {
+    const { W, H, rng, minDim } = S;
+    const list = Array.from({ length: 3 }, (_, k) => ({
+      kind: rng.pick(['disc', 'ring', 'rect']),
+      x: rng.range(0.1, 0.9) * W, y: rng.range(0.1, 0.9) * H,
+      size: minDim * rng.range(0.22, 0.45), rot: rng.range(0, TAU),
+      vx: rng.range(-1, 1) * minDim * 0.02, vy: rng.range(-1, 1) * minDim * 0.02, vr: rng.range(-0.15, 0.15),
+      t0: 0.05 + k * 0.12,
+    }));
+    const lw = Math.max(2, minDim * 0.01);
+    return (r, t, D, col) => {
+      for (const s of list) {
+        const e = backOut(prog(t, s.t0, s.t0 + 0.5), 1.5);
+        if (e <= 0) continue;
+        const d = s.size * e;
+        const o = { x: s.x + s.vx * t, y: s.y + s.vy * t, w: d, h: d, rot: s.rot + s.vr * t, color: withA(col.deco, 0.16) };
+        if (s.kind === 'disc') r.draw({ ...o, mode: 'disc' });
+        else if (s.kind === 'ring') r.draw({ ...o, mode: 'ring', pat: [0, lw, 0, 0] });
+        else r.draw(o);
+      }
+    };
+  },
+  // ブラウン管のような走査線と、ゆっくり下りる明るい帯
+  scanlines(S) {
+    const { W, H, minDim } = S;
+    const period = Math.max(3, minDim * 0.006);
+    return (r, t, D, col) => {
+      const e = expoOut(prog(t, 0, 0.5));
+      r.draw({ x: W / 2, y: H / 2, w: W, h: H, mode: 'stripes', pat: [period, 0.35, Math.PI / 2, 0], color: withA(col.ink, 0.06 * e) });
+      const y = (((t * 0.3) % 1.3) - 0.15) * H;
+      r.draw({ x: W / 2, y, w: W, h: H * 0.14, color: withA(col.ink, 0.045 * e) });
+    };
+  },
+  // 作品の後ろにぼんやり光る円（拍ごとにふくらむ）
+  halo(S) {
+    const { layout, beat } = S;
+    const img = layout.img;
+    const R = Math.max(img.w, img.h) * 0.6;
+    return (r, t, D, col) => {
+      const e = expoOut(prog(t, 0, 0.8));
+      const pulse = 1 + 0.05 * Math.exp(-((t % beat) / beat) * 6);
+      const d = R * 2 * e * pulse;
+      r.draw({ x: img.x, y: img.y, w: d, h: d, color: withA(col.accent, lum(col.bg) > 0.5 ? 0.12 : 0.22), mask: { type: 'circle', p: Math.SQRT1_2, soft: R * 0.6 } });
+    };
+  },
+  // 画面の端に向かって大きくなる網点のグラデーション
+  dotfade(S) {
+    const { W, H, rng, layout, minDim } = S;
+    const land = W > H;
+    const side = land ? (layout.side === 'left' ? 1 : layout.side === 'right' ? -1 : rng.sign()) : 1; // 作品と反対側
+    const n = 5;
+    const per = minDim * 0.03;
+    const sw = (land ? W : H) * 0.07;
+    return (r, t, D, col) => {
+      for (let k = 0; k < n; k++) {
+        const e = expoOut(prog(t, 0.05 + k * 0.05, 0.6 + k * 0.05));
+        if (e <= 0) continue;
+        const ratio = (0.15 + k * 0.2) * e;
+        const pos = sw * (n - k - 0.5); // 端から k 番目
+        const o = land
+          ? { x: side > 0 ? W - pos : pos, y: H / 2, w: sw + 1, h: H }
+          : { x: W / 2, y: H - pos, w: W, h: sw + 1 };
+        r.draw({ ...o, mode: 'dots', pat: [per, ratio, 0, 0], color: withA(col.deco, 0.5) });
+      }
+    };
+  },
+
 };
 
 export const DECOR_KEYS = () => Object.keys(DECORS);

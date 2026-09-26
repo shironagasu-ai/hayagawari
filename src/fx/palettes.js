@@ -26,6 +26,16 @@ export const PALETTES = {
       decoMix: 0.22, // 装飾色は背景と文字の中間（アクセントを装飾に使うと強すぎる）
     };
   },
+  // 同系色: 作品の色相で背景を深く染め、文字も同じ色相の明るい色に
+  tone: ({ dh, ah }) => ({ bg: hsl(dh, 0.45, 0.14), ink: hsl(dh, 0.25, 0.93), accent: hsl(ah, 0.85, 0.62) }),
+  // 補色: 作品の支配色の反対の色相を淡い背景に、アクセントは支配色そのもの
+  complement: ({ dh }) => ({ bg: hsl((dh + 0.5) % 1, 0.32, 0.9), ink: hsl(dh, 0.35, 0.12), accent: hsl(dh, 0.75, 0.45) }),
+  // くすみ: 彩度を落とした中間の明るさ
+  muted: ({ dh, ah }) => ({ bg: hsl(dh, 0.12, 0.74), ink: hsl(dh, 0.2, 0.1), accent: hsl(ah, 0.35, 0.34) }),
+  // 青焼き: 図面のような深い青に白い線（作品の色に関係なく固定）
+  blueprint: () => ({ bg: [0.06, 0.19, 0.42], ink: [0.9, 0.95, 1], accent: [0.55, 0.86, 1], fixedAccent: true }),
+  // 墨と朱: 和紙の地に墨の文字、朱のアクセント（固定）
+  sumi: () => ({ bg: [0.95, 0.93, 0.88], ink: [0.08, 0.08, 0.08], accent: [0.84, 0.2, 0.12], fixedAccent: true }),
 };
 
 export const PALETTE_KEYS = () => Object.keys(PALETTES);

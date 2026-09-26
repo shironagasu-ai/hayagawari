@@ -14,7 +14,10 @@ import {
 export const EXIT_DUR = 0.34, ENTRY_DUR = 0.52;
 
 // 抽選に使うトランジションの種類（スタイルの trans の重みのキーと一致させる）
-export const TRANSITION_KEYS = ['whip', 'zoom', 'iris', 'slices', 'glitch', 'bars', 'cut', 'spin', 'door'];
+export const TRANSITION_KEYS = ['whip', 'zoom', 'iris', 'slices', 'glitch', 'bars', 'cut', 'spin', 'door', 'pixelate', 'dissolve', 'halftone', 'diamond', 'tv', 'flip'];
+
+// 切り替えの間に背景（次の作品のアクセント色）が見える種類
+export const GAP_TRANSITIONS = ['iris', 'door', 'spin', 'dissolve', 'halftone', 'diamond', 'tv', 'flip'];
 
 export function transitionHint(tr, phase, p, dt, W, H) {
   // phase: 'out' | 'in'、p: 0..1（生の進捗）、dt: 1フレーム分の進捗
@@ -83,6 +86,49 @@ export function transitionHint(tr, phase, p, dt, W, H) {
     case 'door': {
       h.sliceAxis = 2;
       h.sliceP = phase === 'out' ? antic(p, 0.3, 0.04) : 1 - expoOut(p);
+      break;
+    }
+    case 'pixelate': {
+      // だんだん粗いモザイクになり、いちばん粗いところで次の作品に入れ替わって細かく戻る
+      const e = phase === 'out' ? expoIn(p) : 1 - expoOut(p);
+      h.pixel = 1 + e * Math.min(W, H) / 7;
+      break;
+    }
+    case 'dissolve': {
+      // マス目ごとにノイズで溶けて抜け、次の作品もノイズから現れる
+      h.cells = 1; h.cellPx = Math.max(4, Math.min(W, H) / 45);
+      h.cellT = phase === 'out' ? quadOut(p) : 1 - expoOut(p);
+      break;
+    }
+    case 'halftone': {
+      // 網点に分解して点が縮んで消え、次の作品は点が膨らんで現れる
+      h.cells = 2; h.cellPx = Math.max(6, Math.min(W, H) / 26);
+      h.cellT = phase === 'out' ? 1.45 * (1 - expoIn(p)) : 1.45 * expoOut(p);
+      break;
+    }
+    case 'diamond': {
+      if (phase === 'out') { h.diamond = Math.max(0.0001, 1 - expoIn(p)); h.mx = tr.ox; h.my = tr.oy; }
+      else { h.diamond = Math.max(0.0001, expoOut(p)); h.mx = tr.ix; h.my = tr.iy; }
+      break;
+    }
+    case 'tv': {
+      // ブラウン管を消すように上下に潰れて光る線になり、点になって消える。入りはその逆
+      if (phase === 'out') {
+        const a = expoIn(prog(p, 0, 0.6)), b = expoIn(prog(p, 0.6, 1));
+        h.sy = Math.max(0.004, 1 - a); h.sx = Math.max(0.003, 1 - b);
+        h.bright = 0.9 * a;
+      } else {
+        const a = expoOut(prog(p, 0, 0.3)), b = expoOut(prog(p, 0.3, 1));
+        h.sx = Math.max(0.003, a); h.sy = Math.max(0.004, b);
+        h.bright = 0.9 * (1 - b);
+      }
+      break;
+    }
+    case 'flip': {
+      // カードを縦軸で裏返すように幅が縮み、裏から次の作品が起き上がる
+      const e = phase === 'out' ? antic(p, 0.3, 0.04) : 1 - expoOut(p);
+      h.sx = Math.max(0.002, Math.cos(e * Math.PI / 2));
+      h.shade = 0.55 * e;
       break;
     }
     default:
