@@ -699,6 +699,12 @@ for (const [name, vp, file] of [['desktop', { width: 1440, height: 900 }, 'hero-
   check(`logo built and fits (${name})`, hero.layers === 20 && hero.logoW <= hero.viewW, `${hero.logoW.toFixed(0)} <= ${hero.viewW}`);
   const poster = await page.evaluate((f) => fetch(`assets/hero/${f}.jpg`).then((r) => r.ok && r.headers.get('content-type')), file);
   check(`hero poster served (${name})`, poster === 'image/jpeg', String(poster));
+  if (name === 'desktop') {
+    // ボタンはトップにだけ。ドロップ欄は押すとファイルを選べる（プレーヤーを開く前に確かめる）
+    check('drop zone has no duplicate buttons', await page.evaluate(() => !document.querySelector('#drop button') && document.querySelectorAll('#hero-pick, #hero-sample').length === 2));
+    const [chooser] = await Promise.all([page.waitForEvent('filechooser', { timeout: 10000 }), page.click('#drop')]);
+    check('clicking the drop zone opens the file picker', chooser.isMultiple());
+  }
   // H.264 を再生できるブラウザ（一般配布の Chrome 等）では実際に動いていること、映像の再生中は止まること
   if (hero.h264) {
     await page.waitForFunction(() => document.querySelector('#hero-video').currentTime > 0.5, null, { timeout: 30000 });
@@ -714,10 +720,6 @@ for (const [name, vp, file] of [['desktop', { width: 1440, height: 900 }, 'hero-
     await page.waitForFunction(() => window.__hg.state.works.length >= 6 && !document.body.classList.contains('busy'), null, { timeout: 30000 });
   }
   if (name === 'desktop') {
-    // ボタンはトップにだけ。ドロップ欄は押すとファイルを選べる
-    check('drop zone has no duplicate buttons', await page.evaluate(() => !document.querySelector('#drop button') && document.querySelectorAll('#hero-pick, #hero-sample').length === 2));
-    const [chooser] = await Promise.all([page.waitForEvent('filechooser', { timeout: 10000 }), page.click('#drop')]);
-    check('clicking the drop zone opens the file picker', chooser.isMultiple());
     const pkgVersion = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version;
     const ver = await page.evaluate(() => ({ kicker: document.querySelector('#ver-kicker').textContent, footer: document.querySelector('#ver').textContent, v: window.__hg.version }));
     check('version shown on site', ver.v === pkgVersion && ver.kicker === `v${pkgVersion}` && ver.footer.includes(`v${pkgVersion}`) && ver.footer.includes('更新履歴'), JSON.stringify(ver));
