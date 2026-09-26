@@ -653,7 +653,9 @@ for (const id of ['#artist', '#subline', '#handle']) $(id).addEventListener('inp
 $('#seed').addEventListener('input', (e) => { state.seed = e.target.value.trim().toUpperCase() || randomSeed(); state.film = null; });
 $('#dice').addEventListener('click', () => { state.seed = randomSeed(); $('#seed').value = state.seed; state.film = null; });
 
-$('#pick').addEventListener('click', () => $('#file').click());
+// ドロップ欄そのものを押すとファイルを選べる（ボタンはトップにだけ置く）
+$('#drop').addEventListener('click', () => $('#file').click());
+$('#drop').addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $('#file').click(); } });
 let scrollToDrop = false; // トップのボタンから読み込んだら、読み込み後に作品一覧まで送る
 $('#file').addEventListener('change', async (e) => {
   const files = e.target.files;
@@ -678,7 +680,6 @@ async function loadSamples(files) {
   }
   await addSources(list);
 }
-$('#sample').addEventListener('click', () => loadSamples());
 
 // ---------------------------------------------------------------- トップの作例動画
 

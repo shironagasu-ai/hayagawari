@@ -66,11 +66,14 @@
   #drop {
     margin-top: 28px; border: 1.5px dashed #3a3a42; border-radius: 14px; padding: 28px 20px;
     display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center;
-    transition: border-color 0.15s, background 0.15s;
+    transition: border-color 0.15s, background 0.15s; cursor: pointer;
   }
+  #drop:hover, #drop:focus-visible { border-color: #5a5a64; background: rgba(255, 255, 255, 0.025); outline: none; }
+  #drop .pick { font-size: 13px; color: var(--ink); text-decoration: underline; text-underline-offset: 4px; text-decoration-color: var(--line); }
   #drop.over { border-color: var(--accent); background: rgba(255, 75, 62, 0.06); }
   #drop .big { font-size: 18px; font-weight: 700; }
   #drop .small { font-size: 12px; color: var(--sub); }
+  #drop .small span { display: inline-block; } /* まとまりの途中で折り返さない */
   .row { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
   .btn {
     border: 1px solid var(--line); background: var(--panel); border-radius: 999px;
@@ -307,15 +310,12 @@
   </header>
   <div class="wrap">
 
-    <div id="drop">
+    <div id="drop" role="button" tabindex="0" aria-label="イラストを選ぶ（ドロップも可）">
       <div class="big">イラストをドロップ</div>
-      <div class="small">PNG / JPG / WebP ・ 複数可 ・ 2〜12枚くらいがおすすめ</div>
-      <div class="row">
-        <button class="btn" id="pick">ファイルを選ぶ</button>
-        <button class="btn" id="sample">サンプルで試す</button>
-      </div>
-      <input type="file" id="file" accept="image/*" multiple>
+      <div class="pick">またはここを押して選ぶ</div>
+      <div class="small"><span>PNG / JPG / WebP ・ 複数可</span> ・ <span>2〜12枚くらいがおすすめ</span></div>
     </div>
+    <input type="file" id="file" accept="image/*" multiple hidden>
 
     <div id="works"></div>
     <div class="works-bar" id="works-bar" hidden>
