@@ -462,8 +462,8 @@ async function sheet(page, file, rows) {
   const { page, errors } = await openPage({ width: 1280, height: 720 });
   await page.evaluate(() => window.__hg.loadSamples());
   await page.waitForFunction(() => window.__hg.state.works.length === 6, null, { timeout: 30000 });
-  await page.goto('http://localhost:8941/elsewhere'); // 404 ページ（別ドキュメントなら何でもよい）
-  errors.length = 0;
+  // 別のページへ移動してから戻る（404 ページだと Chrome がエラーを遅れて出すことがあるので data: の空ページにする）
+  await page.goto('data:text/html,<title>elsewhere</title>');
   await page.goBack({ waitUntil: 'networkidle' });
   const vals = await page.evaluate(() => ['#artist', '#subline', '#handle'].map((id) => document.querySelector(id).value));
   check('no form restore shift after back navigation', vals.every((v) => v === ''), JSON.stringify(vals));
