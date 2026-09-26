@@ -183,6 +183,25 @@
   .adv-body { padding: 0 18px 18px; }
   .adv-body > .hint { margin-top: 0; }
   .adv-body .grid-form { margin-top: 16px; }
+  .field.wide { grid-column: 1 / -1; }
+  .field .hint { margin-top: 8px; }
+  .songrow { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; }
+  .song-panel .songrow { margin-top: 10px; }
+  .btn.sm { padding: 6px 12px; font-size: 12px; }
+  .btn:disabled { opacity: 0.35; cursor: default; }
+  .song-name { font-size: 13px; color: var(--sub); min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #song-field.loading .song-name::after { content: " …"; }
+  #song-field.loading #song-pick { opacity: 0.5; pointer-events: none; }
+  .song-lamp { display: inline-flex; gap: 6px; }
+  .song-lamp i { width: 12px; height: 12px; border-radius: 50%; background: var(--ink); opacity: 0.18; }
+  .song-lamp i:first-child { background: var(--accent); }
+  .song-time { font: 12px var(--mono); color: var(--sub); }
+  .song-bpm { display: inline-flex; align-items: center; gap: 6px; font: 11px var(--mono); letter-spacing: 0.12em; color: var(--sub); }
+  .song-bpm input { width: 76px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; font: 14px var(--mono); color: var(--ink); }
+  .song-bpm input:focus { outline: none; border-color: var(--accent); }
+  .song-bar { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--sub); }
+  #song-tap.hit { animation: taphit 0.18s ease-out; }
+  @keyframes taphit { from { background: var(--accent); border-color: var(--accent); color: #fff; } }
   #adv-reset { margin-left: auto; padding: 5px 12px; font-size: 11px; font-weight: 400; }
   #adv-reset[hidden] { display: none; }
   body:not(.adv-open) .adv-only { display: none !important; }
@@ -342,6 +361,32 @@
         <div class="seg" id="aspect">
           <button data-v="16:9" class="on">16:9</button><button data-v="9:16">9:16</button><button data-v="1:1">1:1</button>
         </div>
+      </div>
+      <div class="field wide" id="song-field">
+        <label>MUSIC / 曲（任意）</label>
+        <div class="songrow">
+          <button class="btn" id="song-pick">♪ 曲を選ぶ</button>
+          <input type="file" id="song-file" accept="audio/*,.mp3,.m4a,.aac,.wav,.ogg,.oga,.flac" hidden>
+          <span class="song-name" id="song-name">未選択（映像だけで再生します）</span>
+          <button class="btn sm" id="song-clear" hidden>外す</button>
+        </div>
+        <div class="song-panel" id="song-panel" hidden>
+          <div class="songrow">
+            <button class="btn sm" id="song-play">▶ 試聴</button>
+            <span class="song-lamp" id="song-lamp" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+            <span class="song-time" id="song-time">0:00 / 0:00</span>
+          </div>
+          <div class="songrow">
+            <label class="song-bpm">BPM <input type="number" id="song-bpm" min="40" max="240" step="0.1" inputmode="decimal"></label>
+            <button class="btn sm" id="song-half" title="BPM を半分に">÷2</button>
+            <button class="btn sm" id="song-double" title="BPM を倍に">×2</button>
+            <button class="btn sm" id="song-tap" title="試聴しながら拍に合わせて押す（T キー）">タップ（T）</button>
+            <span class="song-bar">小節の頭 <button class="btn sm" id="song-bar-prev" title="1 拍前へ">←</button><button class="btn sm" id="song-bar-next" title="1 拍後ろへ">→</button></span>
+            <button class="btn sm" id="song-reset">自動に戻す</button>
+          </div>
+        </div>
+        <p class="hint" id="song-hint"></p>
+        <p class="hint">曲はこのブラウザの中だけで解析・保存され、どこにも送信されません。</p>
       </div>
     </div>
 

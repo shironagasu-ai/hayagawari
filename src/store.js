@@ -2,6 +2,7 @@
 // 保存先はこのブラウザの中だけ（どこにも送信しない）。
 //   kv/"session"   … 設定と作品の並び・タイトル・注目点（小さい。変更のたびに書き直す）
 //   img/<key>      … 画像そのもの（Blob。作品を追加したときに 1 回だけ書く）
+//   kv/"song"      … 持ち込んだ曲（{ key, blob }。選んだときに 1 回だけ書く。拍の設定は session の方に入る）
 
 import { PREVIEW } from './version.js';
 
@@ -46,6 +47,15 @@ export function putImage(key, blob) {
   return tx(['img'], 'readwrite', (t) => { t.objectStore('img').put(blob, key); });
 }
 
+// 曲を保存する（null で消す）
+export function putSong(key, blob) {
+  return tx(['kv'], 'readwrite', (t) => {
+    const kv = t.objectStore('kv');
+    if (blob) kv.put({ key, blob }, 'song');
+    else kv.delete('song');
+  });
+}
+
 // 設定と作品の一覧を書き、今ある作品のどれにも使われていない画像を消す
 // liveKeys: 消す直前に「今ある作品」を聞く（保存中に追加された作品の画像を消さないため）
 export function saveSession(session, liveKeys = () => session.works.map((w) => w.key)) {
@@ -72,7 +82,13 @@ export async function loadSession() {
       const blob = await reqp(imgs.get(w.key));
       if (blob) works.push({ ...w, blob });
     }
-    return { ...session, works };
+    // 曲: 設定と中身の key がそろっているときだけ
+    let song = null;
+    if (session.song) {
+      const stored = await reqp(t.objectStore('kv').get('song'));
+      if (stored && stored.key === session.song.key && stored.blob) song = { ...session.song, blob: stored.blob };
+    }
+    return { ...session, works, song };
   });
 }
 
