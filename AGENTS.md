@@ -1,6 +1,6 @@
 # AGENTS.md — HAYAGAWARI の開発ガイド
 
-このリポジトリで作業する人（とコーディングエージェント）向けの決まりごと・コマンド・構成です。使い方は [README](../README.md)、設計の詳細は [design.md](design.md)、今後の予定は [roadmap.md](roadmap.md)。
+このリポジトリで作業する人（とコーディングエージェント）向けの決まりごと・コマンド・構成です。使い方は [README](README.md)、設計の詳細は [docs/design.md](docs/design.md)、今後の予定は [docs/roadmap.md](docs/roadmap.md)。
 
 ## プロジェクトの概要
 
@@ -67,7 +67,7 @@ tests/e2e.mjs       … Playwright による E2E テスト
 
 ## バージョン管理
 
-[セマンティック バージョニング](https://semver.org/lang/ja/)（`MAJOR.MINOR.PATCH`）。変更の記録は [CHANGELOG.md](../CHANGELOG.md)（[Keep a Changelog](https://keepachangelog.com/ja/1.1.0/) の書式）。
+[セマンティック バージョニング](https://semver.org/lang/ja/)（`MAJOR.MINOR.PATCH`）。変更の記録は [CHANGELOG.md](CHANGELOG.md)（[Keep a Changelog](https://keepachangelog.com/ja/1.1.0/) の書式）。
 
 | 上げる桁 | いつ | 例 |
 |---|---|---|
@@ -120,7 +120,7 @@ v1.0.0 のように複数の PR にまたがる版は、途中の状態を本番
 
 ### サンプル画像・作例（MIT の対象外）
 
-`assets/samples/`・`assets/hero/`・`docs/media/preview.webp` のイラストは作者が権利を保持している（詳細は [`assets/samples/NOTICE.md`](../assets/samples/NOTICE.md)）。デモ表示以外に使わない・ほかの場所へコピーしない・学習データや外部サービスに渡さない。
+`assets/samples/`・`assets/hero/`・`docs/media/preview.webp` のイラストは作者が権利を保持している（詳細は [`assets/samples/NOTICE.md`](assets/samples/NOTICE.md)）。デモ表示以外に使わない・ほかの場所へコピーしない・学習データや外部サービスに渡さない。
 
 - サンプルの一覧・タイトル・見本の注目点は `src/samples.js`。画像は WebP で `assets/samples/` に置く
 

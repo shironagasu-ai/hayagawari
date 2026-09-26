@@ -73,7 +73,7 @@
 
 ## 開発に参加する
 
-開発の決まりごと・コマンド・構成・リリースの手順は [docs/AGENTS.md](docs/AGENTS.md)、設計の詳細は [docs/design.md](docs/design.md) にあります。
+開発の決まりごと・コマンド・構成・リリースの手順は [AGENTS.md](AGENTS.md)、設計の詳細は [docs/design.md](docs/design.md) にあります。
 
 ## ライセンス / クレジット
 
