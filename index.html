@@ -77,6 +77,7 @@
     padding: 10px 18px; font-size: 13px; letter-spacing: 0.04em; transition: border-color 0.12s, transform 0.08s;
   }
   .btn:hover { border-color: #55555f; }
+  a.btn { display: inline-block; color: inherit; text-decoration: none; }
   .btn:active { transform: scale(0.97); }
   .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 700; }
   .btn.primary:disabled { opacity: 0.35; cursor: default; }
@@ -193,6 +194,30 @@
   .ver { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em; color: var(--sub); }
   .ver a { color: inherit; }
   #ver-kicker { margin-left: 0.6em; color: var(--accent); }
+  /* ---------- 演出カタログ ---------- */
+  #catalog { position: fixed; inset: 0; z-index: 20; overflow-y: auto; background: var(--bg); transition: opacity 0.25s; }
+  #catalog[hidden] { display: none; }
+  body.catalog #editor { display: none; }
+  body.playing #catalog { opacity: 0; pointer-events: none; }
+  .cat-head { display: grid; grid-template-columns: auto 1fr; gap: 10px 18px; align-items: center; }
+  .cat-head h2 { font-size: clamp(26px, 5vw, 40px); font-weight: 900; letter-spacing: -0.01em; }
+  .cat-head .kicker { margin-bottom: 2px; }
+  .cat-head .hint { grid-column: 1 / -1; margin: 0; }
+  .cat-head #cat-back { justify-self: start; }
+  .cat-tabs { margin-top: 22px; position: sticky; top: 10px; z-index: 2; box-shadow: 0 4px 18px rgba(0,0,0,0.5); }
+  .cat-tabs button span { font-family: var(--mono); font-size: 10px; opacity: 0.6; margin-left: 2px; }
+  .cat-grid { margin-top: 18px; display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
+  .cat-card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; }
+  .cat-card canvas { display: block; width: 100%; aspect-ratio: 16 / 9; background: #000; opacity: 0.25; transition: opacity 0.3s; }
+  .cat-card.ready canvas { opacity: 1; }
+  .cat-meta { padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 8px; flex: 1; }
+  .cat-name { display: flex; align-items: baseline; gap: 8px; }
+  .cat-name b { font-size: 15px; }
+  .cat-name code { font-family: var(--mono); font-size: 10px; color: var(--sub); }
+  .cat-desc { font-size: 12px; color: #bdbab3; line-height: 1.6; flex: 1; }
+  .cat-row { display: flex; align-items: center; gap: 10px; }
+  .cat-row .btn { padding: 7px 14px; font-size: 12px; }
+  .cat-row .hint { margin: 0; }
   #preview-badge { position: fixed; top: calc(10px + env(safe-area-inset-top)); right: 10px; z-index: 60; font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: 0.08em; padding: 6px 12px; border-radius: 999px; background: #ffd23e; color: #111; text-decoration: none; box-shadow: 0 2px 10px rgba(0,0,0,0.4); }
 
   /* ---------- プレイヤー操作 ---------- */
@@ -368,6 +393,21 @@
       書き出しは1コマずつ描いて MP4 にします（1080p / 4K・60 / 30fps）。対応していないブラウザでは実時間の録画になります。
     </p>
     <p class="ver" id="ver"></p>
+  </div>
+</section>
+
+<section id="catalog" hidden>
+  <div class="wrap">
+    <header class="cat-head">
+      <a class="btn" href="#" id="cat-back">← 作る画面へ</a>
+      <div>
+        <div class="kicker">HAYAGAWARI</div>
+        <h2>演出カタログ</h2>
+      </div>
+      <p class="hint">同じサンプル作品で、演出を 1 つずつ見比べられます。コマ見本は見えたものから描きます。「▶ 再生」でその演出だけの短い映像を流します（E キーか ✕ で戻る）。</p>
+    </header>
+    <nav class="seg cat-tabs" id="cat-tabs"></nav>
+    <div class="cat-grid" id="cat-grid"></div>
   </div>
 </section>
 

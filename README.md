@@ -61,6 +61,12 @@
 
 シード・比率・スタイル等は URL の `#` 以降に入るので、同じ画像を使えば同じ映像を再現できます。
 
+## 演出カタログ
+
+ページ下部の「演出カタログ」（`#catalog`）で、オープニング・エンディング・見せ方・切り替え・背景の飾り・配色・スタイルを、同じサンプル作品で 1 つずつ見比べられる。カードのコマ見本は見えたものから描き、「▶ 再生」でその演出だけの短い映像を流す。PR のプレビューでも使える（新しい演出の確認用）。
+
+演出の実装は `src/fx/` にカテゴリごとに分かれている（`openers.js` / `closers.js` / `variants.js` / `transitions.js` / `decors.js` / `palettes.js` / `themes.js`）。表示名と説明は `src/fx/labels.js`。
+
 ## 仕組み
 
 ```
@@ -70,9 +76,10 @@ src/export.js    … 1コマずつの書き出し（WebCodecs → MP4、映像�
 src/audio.js     … 効果音とビートの合成・楽譜・プレビュー再生
 vendor/          … 同梱ライブラリ（mp4-muxer 5.2.2・MIT）
 src/analyze.js   … 注目点検出（顕著性マップ）とパレット抽出
-src/director.js  … シードから映像の設計図を作り、時刻 t の絵を描く（テーマ・振付・背景装飾・トランジション）
-src/bookends.js  … オープニング / エンディングのパターン
-src/kit.js       … 演出共通の部品（配色・注目点・画像カメラ・文字配置・レイアウト）
+src/director.js  … シードから映像の設計図を作り、時刻 t の絵を描く（演出の抽選・つなぎ・HUD）
+src/fx/          … 演出そのもの（themes / openers / closers / variants / transitions / decors / palettes、表示名は labels）
+src/catalog.js   … 演出カタログ（#catalog）
+src/kit.js       … 演出共通の部品（注目点・画像カメラ・文字配置・レイアウト）
 src/focal-editor.js … 注目点エディタ
 src/gl.js        … WebGL2 レンダラー（マスク・方向ブラー・トランジション合成・ポスト）
 src/text.js      … 文字のテクスチャ化

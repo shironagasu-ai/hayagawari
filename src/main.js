@@ -10,6 +10,8 @@ import { pickEncoderConfig, pickAudioConfig, exportFrames } from './export.js';
 import { AudioEngine, buildScore, renderScoreOffline, SOUND_MODES, SOUND_LABELS } from './audio.js';
 import { newKey, putImage, saveSession, loadSession, requestPersist } from './store.js';
 import { VERSION, BUILD, PREVIEW, storageKey } from './version.js';
+import { initCatalog, catalogFilm, catalogKeys } from './catalog.js';
+import { CATEGORIES, labelOf } from './fx/labels.js';
 
 const $ = (s) => document.querySelector(s);
 const canvas = $('#gl');
@@ -381,6 +383,8 @@ function pause() {
 
 function toEditor() {
   pause();
+  // カタログの見本を流していたら、本編の映像は作り直す
+  if (state.catalogFilm) { state.film = null; state.catalogFilm = false; }
   body.classList.remove('playing');
   heroSync();
   if (document.fullscreenElement) document.exitFullscreen();
@@ -774,7 +778,7 @@ setupLogo();
   const REPO = 'https://github.com/shironagasu-ai/hayagawari';
   $('#ver-kicker').textContent = `v${VERSION}`;
   const build = BUILD.commit === 'dev' ? '開発版' : `<a href="${REPO}/commit/${BUILD.commit}" target="_blank" rel="noopener">${BUILD.commit}</a> ・ ${BUILD.date}`;
-  $('#ver').innerHTML = `HAYAGAWARI v${VERSION} ・ ${build} ・ <a href="${REPO}/releases" target="_blank" rel="noopener">更新履歴</a> ・ <a href="${REPO}" target="_blank" rel="noopener">GitHub</a>`;
+  $('#ver').innerHTML = `HAYAGAWARI v${VERSION} ・ ${build} ・ <a href="#catalog">演出カタログ</a> ・ <a href="${REPO}/releases" target="_blank" rel="noopener">更新履歴</a> ・ <a href="${REPO}" target="_blank" rel="noopener">GitHub</a>`;
   // PR のプレビューでは、本番と見分けられるよう常に表示する
   if (PREVIEW) {
     const a = document.createElement('a');
@@ -863,9 +867,45 @@ resize();
 }
 restoreSession();
 
+// ---------------------------------------------------------------- 演出カタログ（#catalog）
+
+let catalogWorks = null;
+async function loadCatalogWorks() {
+  if (!catalogWorks) {
+    const list = makeSamples('samples').slice(0, 3);
+    catalogWorks = [];
+    for (const s of list) {
+      const w = await analyzeImage(s.canvas, s.name);
+      w.tex = renderer.createTexture(w.source);
+      catalogWorks.push(w);
+    }
+  }
+  return catalogWorks;
+}
+const catalog = initCatalog({
+  renderer,
+  loadWorks: loadCatalogWorks,
+  restore: () => resize(),
+  play: async (cat, key) => {
+    const works = await loadCatalogWorks();
+    tf.dispose();
+    const { film, win } = catalogFilm(cat, key, works, tf);
+    state.film = film;
+    state.catalogFilm = true;
+    refreshScore();
+    resize();
+    renderMarks();
+    state.t = win[0];
+    play(false);
+  },
+});
+window.addEventListener('hashchange', () => catalog.sync());
+catalog.sync();
+
 // テスト・デバッグ用フック
 window.__hg = {
-  version: VERSION, build: BUILD,
+  version: VERSION, build: BUILD, catalog,
+  fx: { CATEGORIES, labelOf, catalogKeys, catalogFilm, loadWorks: () => loadCatalogWorks(), TextFactory },
   state, renderer, tf,
   build, play, pause, reroll, toEditor, setAdvOpen, openExport, xp, audio, setSound,
   loadSamples: () => addSources(makeSamples('samples').map((s) => ({ src: s.canvas, name: s.name }))),
