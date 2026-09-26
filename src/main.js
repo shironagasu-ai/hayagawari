@@ -9,6 +9,7 @@ import { initFocalEditor, openFocalEditor } from './focal-editor.js';
 import { pickEncoderConfig, pickAudioConfig, exportFrames } from './export.js';
 import { AudioEngine, buildScore, renderScoreOffline, SOUND_MODES, SOUND_LABELS } from './audio.js';
 import { newKey, putImage, saveSession, loadSession, requestPersist } from './store.js';
+import { VERSION, BUILD } from './version.js';
 
 const $ = (s) => document.querySelector(s);
 const canvas = $('#gl');
@@ -767,6 +768,14 @@ function setupLogo() {
   }, 5200);
 }
 setupLogo();
+
+// バージョン表記（コミットと日付はデプロイ時に CI が書き込む）
+{
+  const REPO = 'https://github.com/shironagasu-ai/hayagawari';
+  $('#ver-kicker').textContent = `v${VERSION}`;
+  const build = BUILD.commit === 'dev' ? '開発版' : `<a href="${REPO}/commit/${BUILD.commit}" target="_blank" rel="noopener">${BUILD.commit}</a> ・ ${BUILD.date}`;
+  $('#ver').innerHTML = `HAYAGAWARI v${VERSION} ・ ${build} ・ <a href="${REPO}/releases" target="_blank" rel="noopener">更新履歴</a> ・ <a href="${REPO}" target="_blank" rel="noopener">GitHub</a>`;
+}
 const drop = $('#drop');
 window.addEventListener('dragover', (e) => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); drop.classList.add('over'); } });
 window.addEventListener('dragleave', (e) => { if (!e.relatedTarget) drop.classList.remove('over'); });
@@ -845,6 +854,7 @@ restoreSession();
 
 // テスト・デバッグ用フック
 window.__hg = {
+  version: VERSION, build: BUILD,
   state, renderer, tf,
   build, play, pause, reroll, toEditor, setAdvOpen, openExport, xp, audio, setSound,
   loadSamples: () => addSources(makeSamples('samples').map((s) => ({ src: s.canvas, name: s.name }))),

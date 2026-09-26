@@ -190,6 +190,9 @@
   .cta { margin-top: 34px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
   .cta .btn.primary { padding: 14px 30px; font-size: 15px; }
   .note { font-size: 11px; color: var(--sub); line-height: 1.7; margin-top: 26px; }
+  .ver { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em; color: var(--sub); }
+  .ver a { color: inherit; }
+  #ver-kicker { margin-left: 0.6em; color: var(--accent); }
 
   /* ---------- プレイヤー操作 ---------- */
   #bar {
@@ -257,7 +260,7 @@
     <video id="hero-video" muted loop playsinline preload="metadata" aria-hidden="true" tabindex="-1"></video>
     <div class="hero-shade"></div>
     <div class="hero-in">
-      <div class="kicker">PORTFOLIO MOTION GENERATOR</div>
+      <div class="kicker">PORTFOLIO MOTION GENERATOR <span id="ver-kicker"></span></div>
       <h1 class="logo" id="logo" aria-label="HAYAGAWARI">HAYA<span class="b">GAWARI</span></h1>
       <p class="lead">イラストを並べるだけで、注目点を解析してキビキビ動くポートフォリオ映像を生成します。シードを変えるたびに別の演出に。画像はブラウザ内で処理・保存され、どこにも送信されません。</p>
       <div class="row hero-cta">
@@ -363,6 +366,7 @@
       操作: Space 再生/停止 ・ R 別バージョン（シード変更）・ ← → 前/次の作品 ・ M 音の切り替え ・ F 全画面 ・ E 編集に戻る ・ P パフォーマンス表示<br>
       書き出しは1コマずつ描いて MP4 にします（1080p / 4K・60 / 30fps）。対応していないブラウザでは実時間の録画になります。
     </p>
+    <p class="ver" id="ver"></p>
   </div>
 </section>
 

@@ -552,6 +552,11 @@ for (const [name, vp, file] of [['desktop', { width: 1440, height: 900 }, 'hero-
     await page.click('#hero-sample');
     await page.waitForFunction(() => window.__hg.state.works.length === 6, null, { timeout: 30000 });
   }
+  if (name === 'desktop') {
+    const pkgVersion = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version;
+    const ver = await page.evaluate(() => ({ kicker: document.querySelector('#ver-kicker').textContent, footer: document.querySelector('#ver').textContent, v: window.__hg.version }));
+    check('version shown on site', ver.v === pkgVersion && ver.kicker === `v${pkgVersion}` && ver.footer.includes(`v${pkgVersion}`) && ver.footer.includes('更新履歴'), JSON.stringify(ver));
+  }
   check(`hero sample button loads samples (${name})`, await page.evaluate(() => window.__hg.state.works.length === 6));
   await page.evaluate(() => { document.querySelector('#editor').scrollTop = 0; });
   await page.screenshot({ path: join(outDir, `hero-${name}.png`) });

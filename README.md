@@ -86,13 +86,31 @@ tests/e2e.mjs    … Playwright による E2E テスト
 - カットは BPM の拍頭に置き、動きは「溜めて（ほぼ静止 or 微速ドリフト）→ 数フレームで詰める → ピタッと止める」で設計
 - 詳細な設計は [docs/design.md](docs/design.md)
 
+## バージョン管理
+
+[セマンティック バージョニング](https://semver.org/lang/ja/)（`MAJOR.MINOR.PATCH`）。変更の記録は [CHANGELOG.md](CHANGELOG.md)、各版は [Releases](https://github.com/shironagasu-ai/hayagawari/releases)。
+
+| 上げる桁 | いつ | 例 |
+|---|---|---|
+| MAJOR | 保存した作業が読めなくなる・URL の設定の意味が変わる・使い方が大きく変わる | 保存形式の作り直し、設定項目の廃止 |
+| MINOR | 機能・演出・スタイルの追加 | オープニングの追加、新しい設定 |
+| PATCH | 不具合の修正・見た目の微調整 | 表示崩れ、効果音の修正 |
+
+補足: **同じシードで同じ映像になるのは同じバージョンの中だけ**。演出の候補が増える MINOR 以上の更新では、共有された URL でも以前と違う映像になることがある（CHANGELOG に明記する）。
+
+**リリースの手順**
+
+1. PR で `src/version.js` の `VERSION`・`package.json` の `version`（`npm version X.Y.Z --no-git-tag-version` で lock も一緒に更新）・`CHANGELOG.md`（`## [Unreleased]` の中身を `## [X.Y.Z] - 日付` に移す）をそろえる。CI の「Version check」で一致を確認する
+2. main にマージすると、テスト → Pages 公開 → **タグ `vX.Y.Z` と GitHub Release の作成**（本文は CHANGELOG の該当の節）まで自動で行う。バージョンを上げていないマージでは公開だけ行い、リリースは作らない
+3. サイトではトップの「PORTFOLIO MOTION GENERATOR」の横と、ページ下部に `vX.Y.Z ・ コミット ・ 日付` を表示する（コミットと日付は公開時に CI が書き込む。ローカルでは「開発版」）
+
 ## 自動テストと公開（GitHub Actions）
 
 `.github/workflows/ci.yml`
 
 - **PR と main へのプッシュ**で E2E テストを実行。Playwright の Chromium と、一般配布の Google Chrome の 2 種類で並行して回す（Chrome では H.264 で書き出せることも確認）
 - テストのスクリーンショットと書き出した動画は、実行結果の Artifacts から 7 日間ダウンロードできる
-- **main でテストが通ったときだけ** GitHub Pages へ公開（`index.html` / `src` / `vendor` / `assets` / `LICENSE` のみ）
+- **main でテストとバージョン確認が通ったときだけ** GitHub Pages へ公開（`index.html` / `src` / `vendor` / `assets` / `LICENSE` のみ）
 - 事前設定: Settings → Pages → Build and deployment → Source を **GitHub Actions** にする
 
 ## トップの作例動画
