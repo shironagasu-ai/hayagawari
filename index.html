@@ -210,6 +210,8 @@
   .cat-card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; }
   .cat-card canvas { display: block; width: 100%; aspect-ratio: 16 / 9; background: #000; opacity: 0.25; transition: opacity 0.3s; }
   .cat-card.ready canvas { opacity: 1; }
+  .cat-card { transition: border-color 0.2s, box-shadow 0.2s; }
+  .cat-card.live { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
   .cat-meta { padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 8px; flex: 1; }
   .cat-name { display: flex; align-items: baseline; gap: 8px; }
   .cat-name b { font-size: 15px; }
@@ -404,7 +406,7 @@
         <div class="kicker">HAYAGAWARI</div>
         <h2>演出カタログ</h2>
       </div>
-      <p class="hint">同じサンプル作品で、演出を 1 つずつ見比べられます。コマ見本は見えたものから描きます。「▶ 再生」でその演出だけの短い映像を流します（E キーか ✕ で戻る）。</p>
+      <p class="hint">同じサンプル作品で、演出を 1 つずつ見比べられます。画面の中央のカード（PC ではマウスを乗せたカード）がその場で動き、ほかはコマ送りで動きます。「▶ 全画面で再生」でその演出だけの短い映像を大きく流します（E キーで戻る）。</p>
     </header>
     <nav class="seg cat-tabs" id="cat-tabs"></nav>
     <div class="cat-grid" id="cat-grid"></div>

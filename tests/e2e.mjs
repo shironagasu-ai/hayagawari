@@ -600,6 +600,19 @@ async function sheet(page, file, rows) {
   await page.waitForFunction(() => document.querySelectorAll('.cat-card.ready').length >= 2, null, { timeout: 120000 });
   const ui = await page.evaluate(() => ({ tabs: document.querySelectorAll('#cat-tabs button').length, cards: document.querySelectorAll('.cat-card').length, first: window.__hg.fx.catalogKeys('opener').length }));
   check('catalog page lists every opener', ui.tabs === 7 && ui.cards === ui.first, JSON.stringify(ui));
+  // 一覧のまま、画面中央のカードがその場で再生される（コマが変わっていく）
+  await page.waitForFunction(() => document.querySelector('.cat-card.live'), null, { timeout: 60000 });
+  const liveMoves = await page.evaluate(async () => {
+    const cv = document.querySelector('.cat-card.live canvas');
+    const snap = () => { const c = document.createElement('canvas'); c.width = 32; c.height = 18; const g = c.getContext('2d'); g.drawImage(cv, 0, 0, 32, 18); return g.getImageData(0, 0, 32, 18).data; };
+    const a = snap();
+    await new Promise((r) => setTimeout(r, 700));
+    const b = snap();
+    let d = 0;
+    for (let i = 0; i < a.length; i++) d += Math.abs(a[i] - b[i]);
+    return d / a.length;
+  });
+  check('catalog card plays inline', liveMoves > 0.5, liveMoves.toFixed(2));
   await page.click('#cat-tabs button[data-v="transition"]');
   await page.waitForFunction(() => location.hash === '#catalog=transition' && document.querySelectorAll('.cat-card[data-cat="transition"]').length > 0);
   // 見本を再生 → 戻るとカタログに戻り、本編の映像は作り直される
