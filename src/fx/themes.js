@@ -73,6 +73,30 @@ export const THEMES = {
     decor: { number: 3, stripes: 2, grid: 1, marquee: 1, rings: 1, ticker: 1, shapes: 1, scanlines: 2, halo: 1, dotfade: 2 },
     palettes: { paper: 3, muted: 1, blueprint: 1 },
   },
+  RISO: {
+    label: 'RISO', bg: 'riso', font: 'condensed', weight: 900, tracking: 0.02, upper: true,
+    grain: 0.07, vignette: 0.05, hud: true, bpm: [112, 124], aberrBase: 0.5, // 版ずれ
+    variants: { duotone: 4, quad: 3, card: 2, mosaic: 2, triptych: 2, split: 2, cuts: 1, focus: 1, pan: 1, spotlight: 1, lockon: 1, punch: 1, scan: 1, swing: 2, dive: 1, slam: 1, cinema: 1, pixel: 1 },
+    trans: { halftone: 4, slices: 2, bars: 2, flip: 2, diamond: 2, whip: 1, cut: 1, door: 1, dissolve: 1, iris: 1 },
+    decor: { dotfade: 3, dots: 3, shapes: 2, stripes: 2, number: 1, rings: 1, ticker: 1 },
+    palettes: { riso: 4, complement: 1 },
+  },
+  CINEMA: {
+    label: 'CINEMA', bg: 'cinema', font: 'sans', weight: 600, tracking: 0.18, upper: true,
+    grain: 0.06, vignette: 0.6, hud: true, bpm: [96, 108],
+    variants: { cinema: 5, pan: 3, focus: 3, spotlight: 2, scan: 1, dive: 1, split: 1, card: 1, cuts: 1, punch: 1, lockon: 1, triptych: 1 },
+    trans: { cut: 3, zoom: 2, whip: 2, iris: 2, dissolve: 2, tv: 1, slices: 1 },
+    decor: { blur: 3, halo: 2, number: 1, scanlines: 1, grid: 1, rings: 1 },
+    palettes: { cinema: 4, dark: 1 },
+  },
+  ZINE: {
+    label: 'ZINE', bg: 'zine', font: 'serif', weight: 900, tracking: 0.0, upper: true,
+    grain: 0.12, vignette: 0.2, hud: true, bpm: [118, 130],
+    variants: { card: 3, swing: 3, slam: 3, quad: 2, mosaic: 2, cuts: 2, triptych: 2, pixel: 1, duotone: 1, focus: 1, split: 1, punch: 1 },
+    trans: { flip: 3, slices: 3, cut: 3, bars: 2, door: 2, pixelate: 1, halftone: 1, whip: 1 },
+    decor: { shapes: 2, stripes: 2, number: 2, ticker: 2, dots: 1, grid: 1, dotfade: 1 },
+    palettes: { zine: 4, sumi: 1, muted: 1 },
+  },
 };
 
 // MIX: 作品ごとにスタイルを抽選する（オープニング/エンディング/HUD/BPM はベースのスタイル）

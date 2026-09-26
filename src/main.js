@@ -6,12 +6,12 @@ import { buildFilm } from './director.js';
 import { SAMPLES, pickSamples, samplesByFile, fetchSamples } from './samples.js';
 import { randomSeed, createRng } from './rng.js';
 import { initFocalEditor, openFocalEditor } from './focal-editor.js';
-import { pickEncoderConfig, pickAudioConfig, exportFrames } from './export.js';
-import { AudioEngine, buildScore, renderScoreOffline, SOUND_MODES, SOUND_LABELS } from './audio.js';
+import { pickEncoderConfig, exportFrames } from './export.js';
 import { newKey, putImage, saveSession, loadSession, requestPersist } from './store.js';
 import { VERSION, BUILD, PREVIEW, storageKey } from './version.js';
 import { initCatalog, catalogFilm, catalogKeys } from './catalog.js';
 import { CATEGORIES, labelOf } from './fx/labels.js';
+import { AVOID_DECOR } from './fx/rules.js';
 
 const $ = (s) => document.querySelector(s);
 const canvas = $('#gl');
@@ -27,7 +27,6 @@ try {
   throw e;
 }
 const tf = new TextFactory(renderer);
-const audio = new AudioEngine();
 
 const state = {
   works: [], // analyzeImage の結果 + id
@@ -38,7 +37,6 @@ const state = {
   order: 'keep',
   opener: 'auto',
   closer: 'auto',
-  sound: 'full', // 'full' ビート＋効果音 / 'sfx' 効果音のみ / 'off'
   advOpen: false, // 詳細設定アコーディオンの開閉（映像全体の設定だけ。作品ごとのタイトル・注目点は開閉に関係なく常に反映）
   film: null,
   t: 0,
@@ -327,7 +325,6 @@ function build() {
     artist: $('#artist').value.trim(), subline: $('#subline').value.trim(), handle: $('#handle').value.trim(),
   });
   state.buildMs = performance.now() - t0;
-  refreshScore();
   resize();
   renderMarks();
   $('#i-style').textContent = state.film.theme;
@@ -339,36 +336,10 @@ function build() {
   return state.film;
 }
 
-// ---------------------------------------------------------------- 音
-
-function refreshScore() {
-  if (!state.film) return;
-  state.score = buildScore(state.film, state.seed, state.sound);
-  audio.setScore(state.score, state.seed);
-}
-
-// 再生位置が飛んだとき（再生開始・シーク・ループ）に音を合わせ直す
-function syncAudio() {
-  if (state.playing && state.sound !== 'off') audio.start(state.t);
-  else audio.stop();
-}
-
-const SOUND_ICON = { full: '🔊', sfx: '🔉', off: '🔇' };
-function setSound(mode) {
-  state.sound = SOUND_MODES.includes(mode) ? mode : 'full';
-  try { localStorage.setItem(storageKey('hg-sound'), state.sound); } catch { /* 保存できなくても動作に影響なし */ }
-  const b = $('#snd');
-  b.textContent = `${SOUND_ICON[state.sound]} ${SOUND_LABELS[state.sound]}`;
-  b.classList.toggle('muted', state.sound === 'off');
-  refreshScore();
-  syncAudio();
-}
-
 function play(fromStart = true) {
   if (!state.film) build();
   if (!state.film) return;
   if (fromStart) state.t = 0;
-  audio.unlock(); // ユーザー操作の中で音を許可
   state.playing = true;
   if (!body.classList.contains('playing')) {
     body.classList.add('playing');
@@ -378,13 +349,11 @@ function play(fromStart = true) {
   }
   $('#play').textContent = '❚❚';
   heroSync();
-  syncAudio();
   poke();
 }
 
 function pause() {
   state.playing = false;
-  audio.stop();
   $('#play').textContent = '▶';
   state.dirty = true;
 }
@@ -445,7 +414,6 @@ function renderMarks() {
 const perf = { frames: 0, acc: 0, fps: 0, jsMs: 0, worst: 0, lastReport: 0 };
 let last = performance.now();
 let rafId = 0;
-const audioClock = { last: -1 }; // 音声の時計が止まっている環境（出力先なし等）を見分ける
 
 function fmt(s) {
   const m = Math.floor(s / 60);
@@ -460,19 +428,11 @@ function frame(now) {
   if (f) {
     if (state.playing) {
       state.t += dt;
-      // 音が鳴っているときは音の時計に合わせる（小さなズレはなめらかに、大きなズレは即座に）
-      const at = audio.filmTime();
-      if (Number.isFinite(at) && at >= 0 && at < f.duration && audio.ctx.currentTime !== audioClock.last) {
-        const diff = at - state.t;
-        state.t = Math.abs(diff) > 0.06 ? at : state.t + diff * 0.15;
-      }
-      if (audio.ctx) audioClock.last = audio.ctx.currentTime;
       if (state.t >= f.duration) {
         if (recorder) { finishRecording(); }
-        else if (state.loop) { state.t %= f.duration; syncAudio(); }
+        else if (state.loop) { state.t %= f.duration; }
         else { state.t = f.duration; pause(); }
       }
-      audio.pump();
     }
     if ((state.playing || state.dirty) && !state.exporting) {
       const t0 = performance.now();
@@ -511,26 +471,18 @@ let recorder = null;
 let recChunks = [];
 let recCancelled = false;
 
-function pickMime(withAudio) {
-  const cands = withAudio
-    ? ['video/mp4;codecs=avc1,mp4a.40.2', 'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm']
-    : ['video/mp4;codecs=avc1.640028', 'video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
+function pickMime() {
+  const cands = ['video/mp4;codecs=avc1.640028', 'video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
   return cands.find((m) => window.MediaRecorder && MediaRecorder.isTypeSupported(m));
 }
 
-function startRecording(sound = state.sound) {
+function startRecording() {
   if (!state.film || recorder) return;
-  const withAudio = sound !== 'off' && audio.unlock();
-  const mime = pickMime(withAudio);
+  const mime = pickMime();
   if (!mime || !canvas.captureStream) { toast('このブラウザは録画に対応していません'); return; }
   resize(1); // 仮想解像度そのままで録画
   state.film.render(renderer, 0);
   const stream = canvas.captureStream(60);
-  if (withAudio) {
-    if (sound !== state.sound) setSound(sound);
-    const as = audio.stream();
-    if (as) as.getAudioTracks().forEach((tr) => stream.addTrack(tr));
-  }
   recChunks = [];
   recCancelled = false;
   recorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 16_000_000 });
@@ -563,7 +515,7 @@ function download(blob, ext) {
 
 // ---------------------------------------------------------------- 書き出し（1コマずつ・WebCodecs）
 
-const xp = { res: 1, fps: 60, sound: 'full', enc: null, aenc: null, abort: null, running: false, limit: 0 }; // limit: テスト用に書き出す秒数を制限
+const xp = { res: 1, fps: 60, enc: null, abort: null, running: false, limit: 0 }; // limit: テスト用に書き出す秒数を制限（音声は入れない）
 
 function exportSize() {
   const [W, H] = ASPECTS[state.aspect];
@@ -575,7 +527,6 @@ async function refreshExportInfo() {
   const info = $('#xp-info');
   info.textContent = '判定中…';
   xp.enc = await pickEncoderConfig(w, h, xp.fps);
-  xp.aenc = xp.sound === 'off' ? null : await pickAudioConfig(48000, 2);
   const d = state.film.duration;
   const frames = Math.ceil(d * xp.fps);
   if (!xp.enc) {
@@ -584,9 +535,7 @@ async function refreshExportInfo() {
   }
   const mb = (xp.enc.config.bitrate * d) / 8 / 1e6;
   let msg = `方式: <b>1コマずつ（${xp.enc.label} / MP4）</b> ・ ${w}×${h} ・ ${xp.fps}fps ・ ${fmt(d)}（${frames} コマ）・ 約 ${mb.toFixed(0)} MB`;
-  msg += `<br>音声: ${xp.sound === 'off' ? 'なし' : xp.aenc ? `<b>${SOUND_LABELS[xp.sound]}（${xp.aenc.label}）</b>` : '<span class="warn">このブラウザは音声の書き出しに対応していないため、映像のみになります</span>'}`;
   if (xp.enc.muxCodec !== 'avc') msg += `<br><span class="warn">このブラウザでは H.264 が使えないため ${xp.enc.label} になります。iPhone の写真アプリや一部の SNS では再生・投稿できないことがあります（Chrome / Edge / Safari なら H.264 で書き出せます）。</span>`;
-  if (xp.aenc && xp.aenc.muxCodec !== 'aac') msg += `<br><span class="warn">AAC が使えないため音声は ${xp.aenc.label} になります。iPhone の写真アプリや一部の SNS では音が出ない・投稿できないことがあります。</span>`;
   info.innerHTML = msg;
 }
 
@@ -597,14 +546,12 @@ function openExport() {
   $('#xp-progress').hidden = true;
   $('#xp-start').disabled = false;
   $('#xp-close').textContent = '閉じる';
-  xp.sound = state.sound;
-  $('#xp-snd').querySelectorAll('button').forEach((x) => x.classList.toggle('on', x.dataset.v === xp.sound));
   refreshExportInfo();
 }
 
 async function startExport() {
   if (xp.running) return;
-  if (!xp.enc) { $('#xp').hidden = true; startRecording(xp.sound); return; }
+  if (!xp.enc) { $('#xp').hidden = true; startRecording(); return; }
   xp.running = true;
   state.exporting = true;
   xp.abort = new AbortController();
@@ -616,14 +563,8 @@ async function startExport() {
   const f = state.film;
   const dur = xp.limit > 0 ? Math.min(xp.limit, f.duration) : f.duration;
   try {
-    let audioTrack;
-    if (xp.aenc) {
-      $('#xp-status').textContent = '音声を生成中…';
-      const buffer = await renderScoreOffline(buildScore(f, state.seed, xp.sound), state.seed, dur);
-      audioTrack = { buffer, enc: xp.aenc };
-    }
     const blob = await exportFrames({
-      canvas, fps: xp.fps, enc: xp.enc, duration: dur, signal: xp.abort.signal, audio: audioTrack,
+      canvas, fps: xp.fps, enc: xp.enc, duration: dur, signal: xp.abort.signal,
       renderAt: (t) => f.render(renderer, t),
       onProgress: (p, i) => {
         $('#xp-fill').style.transform = `scaleX(${p})`;
@@ -631,7 +572,7 @@ async function startExport() {
       },
     });
     download(blob, 'mp4');
-    toast(`書き出し完了（${(blob.size / 1e6).toFixed(1)} MB・${xp.enc.label}${audioTrack ? ' + ' + xp.aenc.label : ''} / MP4）`);
+    toast(`書き出し完了（${(blob.size / 1e6).toFixed(1)} MB・${xp.enc.label} / MP4）`);
     $('#xp').hidden = true;
   } catch (e) {
     if (e.name === 'AbortError') toast('書き出しを中止しました');
@@ -674,7 +615,6 @@ function wake() {
 function seekTo(clientX) {
   const r = $('#seek').getBoundingClientRect();
   state.t = Math.max(0, Math.min(1, (clientX - r.left) / r.width)) * state.film.duration;
-  syncAudio();
   poke();
 }
 
@@ -685,23 +625,20 @@ function jump(dir) {
   let i = starts.findIndex((s, k) => state.t >= s && (k === starts.length - 1 || state.t < starts[k + 1]));
   i = Math.max(0, Math.min(starts.length - 1, i + dir));
   state.t = starts[i];
-  syncAudio();
   poke();
 }
 
 // ---------------------------------------------------------------- イベント
 
 const hashAdv = readHash();
-{
-  let snd = 'full';
-  try { snd = localStorage.getItem(storageKey('hg-sound')) || 'full'; } catch { /* プライベートモード等 */ }
-  state.sound = SOUND_MODES.includes(snd) ? snd : 'full';
-}
 $('#seed').value = state.seed;
 // オープニング・エンディングのボタンは演出の一覧から作る（演出を足すと自動で増える）
 for (const cat of ['opener', 'closer']) {
   $('#' + cat).insertAdjacentHTML('beforeend', catalogKeys(cat).map((k) => `<button data-v="${k}">${labelOf(cat, k)[0]}</button>`).join(''));
 }
+// スタイルも同じ（ミックスは最後に）
+$('#style').insertAdjacentHTML('beforeend', catalogKeys('style').filter((k) => k !== 'MIX').map((k) => `<button data-v="${k}">${labelOf('style', k)[0]}</button>`).join('')
+  + '<button data-v="MIX" title="作品ごとにスタイルを抽選">ミックス</button>');
 bindSeg('#aspect', 'aspect');
 bindSeg('#pace', 'pace');
 bindSeg('#style', 'style');
@@ -854,14 +791,13 @@ window.addEventListener('popstate', () => {
   if (body.classList.contains('playing') && player.entry) toEditor({ fromHistory: true });
 });
 $('#export').addEventListener('click', openExport);
-$('#snd').addEventListener('click', () => { audio.unlock(); setSound(SOUND_MODES[(SOUND_MODES.indexOf(state.sound) + 1) % SOUND_MODES.length]); });
 $('#xp-start').addEventListener('click', startExport);
 $('#xp-close').addEventListener('click', () => { if (xp.running) xp.abort.abort(); else $('#xp').hidden = true; });
-for (const [id, key] of [['#xp-res', 'res'], ['#xp-fps', 'fps'], ['#xp-snd', 'sound']]) {
+for (const [id, key] of [['#xp-res', 'res'], ['#xp-fps', 'fps']]) {
   $(id).addEventListener('click', (e) => {
     const b = e.target.closest('button');
     if (!b || xp.running) return;
-    xp[key] = key === 'sound' ? b.dataset.v : Number(b.dataset.v);
+    xp[key] = Number(b.dataset.v);
     $(id).querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
     refreshExportInfo();
   });
@@ -898,12 +834,10 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'f' || e.key === 'F') $('#fs').click();
   else if (e.key === 'e' || e.key === 'E') toEditor();
   else if (e.key === 'p' || e.key === 'P') body.classList.toggle('perf');
-  else if (e.key === 'm' || e.key === 'M') $('#snd').click();
   wake();
 });
 document.addEventListener('visibilitychange', () => { if (document.hidden && recorder) toast('録画中はタブを前面にしてください'); });
 
-setSound(state.sound);
 resize();
 {
   let open = false;
@@ -949,7 +883,6 @@ const catalog = initCatalog({
     const { film, win } = catalogFilm(cat, key, works, tf);
     state.film = film;
     state.catalogFilm = true;
-    refreshScore();
     resize();
     renderMarks();
     state.t = win[0];
@@ -962,9 +895,9 @@ catalog.sync();
 // テスト・デバッグ用フック
 window.__hg = {
   version: VERSION, build: BUILD, catalog,
-  fx: { CATEGORIES, labelOf, catalogKeys, catalogFilm, loadWorks: () => loadCatalogWorks(), TextFactory },
+  fx: { CATEGORIES, labelOf, catalogKeys, catalogFilm, loadWorks: () => loadCatalogWorks(), TextFactory, AVOID_DECOR },
   state, renderer, tf,
-  build, play, pause, reroll, toEditor, setAdvOpen, openExport, xp, audio, setSound,
+  build, play, pause, reroll, toEditor, setAdvOpen, openExport, xp,
   // テスト用: 既定は先頭 6 点の決まった組（ボタンからはランダム）
   samples: { SAMPLES, pickSamples },
   loadSamples: (files = SAMPLES.slice(0, 6).map((x) => x.file)) => loadSamples(files),

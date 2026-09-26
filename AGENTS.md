@@ -35,8 +35,7 @@ src/kit.js          … 演出共通の部品（注目点・画像カメラ・�
 src/gl.js           … WebGL2 レンダラー（マスク・方向ブラー・トランジション合成・ポスト）
 src/analyze.js      … 注目点検出（顕著性マップ）とパレット抽出
 src/focal-editor.js … 注目点エディタ
-src/export.js       … 1 コマずつの書き出し（WebCodecs → MP4、映像＋音声）
-src/audio.js        … 効果音とビートの合成・楽譜・プレビュー再生
+src/export.js       … 1 コマずつの書き出し（WebCodecs → MP4。音声を入れる仕組みもあるが v1.0.0 では使っていない）
 src/store.js        … 作業の保存（IndexedDB）
 src/version.js      … バージョン・ビルド情報・プレビュー判定・保存キー
 src/text.js         … 文字のテクスチャ化
@@ -73,7 +72,7 @@ tests/e2e.mjs       … Playwright による E2E テスト
 |---|---|---|
 | MAJOR | 保存した作業が読めなくなる・URL の設定の意味が変わる・使い方が大きく変わる | 保存形式の作り直し、設定項目の廃止 |
 | MINOR | 機能・演出・スタイルの追加 | オープニングの追加、新しい設定 |
-| PATCH | 不具合の修正・見た目の微調整 | 表示崩れ、効果音の修正 |
+| PATCH | 不具合の修正・見た目の微調整 | 表示崩れ、書き出しの修正 |
 
 同じシードで同じ映像になるのは同じバージョンの中だけ。演出の候補が増える MINOR 以上の更新では、共有された URL でも以前と違う映像になることがある（CHANGELOG に明記する）。
 
@@ -134,7 +133,7 @@ v1.0.0 のように複数の PR にまたがる版は、途中の状態を本番
   FFMPEG=/path/to/ffmpeg node tools/make-hero.mjs --images ./my-illustrations --name HAYAGAWARI --sub PORTFOLIO --link shironagasu-ai.github.io/hayagawari --seed HERO-01
   ```
 
-  `--images` を省くとサンプル画像で作る。libx264 入りの ffmpeg が必要（`pip install imageio-ffmpeg` で入る静的ビルドでも可）
+  `--images` を省くとサンプル画像（`assets/samples/` の全点）で作る。libx264 入りの ffmpeg が必要（`pip install imageio-ffmpeg` で入る静的ビルドでも可）
 - iPhone を含めて自動再生できるよう **H.264・音声なし**。解像度は 1280×720 / 720×1280、9 作品・約 45 秒で 1 本 3.5MB 前後（`--crf` で調整）
 - 画面外・映像の再生中・タブ非表示のときは止める。「動きを減らす」設定ではポスター画像のみ
 - 作例のクレジット表記は `index.html` の `#hero-credit`

@@ -1,6 +1,6 @@
 // トップページ背景のループ動画を作る。リポジトリルートで:
 //   FFMPEG=/path/to/ffmpeg node tools/make-hero.mjs [--images DIR] [--name NAME] [--sub SUBTITLE] [--link URL] [--seed SEED] [--style MIX]
-// --crf で画質（既定 30。小さいほど高画質・大きいファイル）。--images を省略すると内蔵サンプルで作る。画像はファイル名順に並ぶ（先頭の「1 」などの番号はタイトルから除く）。出力: assets/hero/hero-16x9.mp4, hero-9x16.mp4 と各ポスター画像（.jpg）
+// --crf で画質（既定 30。小さいほど高画質・大きいファイル）。--images を省略するとサンプル画像（assets/samples/ の全点）で作る。画像はファイル名順に並ぶ（先頭の「1 」などの番号はタイトルから除く）。出力: assets/hero/hero-16x9.mp4, hero-9x16.mp4 と各ポスター画像（.jpg）
 //
 // HAYAGAWARI 自身の描画を 1 コマずつ JPEG で取り出し、ffmpeg で H.264（音声なし）に変換する。
 // H.264 にするのは iPhone の Safari を含めて背景で自動再生できるようにするため（VP9 は iOS で再生できないことがある）。
@@ -58,8 +58,9 @@ for (const job of JOBS) {
     // 並び順用の先頭の番号（例: "1 No. 636.png"）はタイトルから外す
     await page.evaluate(() => window.__hg.state.works.forEach((w) => { w.title = w.title.replace(/^\d+\s+/, ''); }));
   } else {
-    await page.evaluate(() => window.__hg.loadSamples());
-    await page.waitForFunction(() => window.__hg.state.works.length >= 6);
+    // サンプル画像を全部（タイトルと見本の注目点つき）
+    const n = await page.evaluate(() => { const all = window.__hg.samples.SAMPLES.map((x) => x.file); window.__hg.loadSamples(all); return all.length; });
+    await page.waitForFunction((k) => window.__hg.state.works.length === k && !document.body.classList.contains('busy'), n);
   }
   await page.fill('#artist', args.name || '');
   await page.fill('#subline', args.sub || '');
