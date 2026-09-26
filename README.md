@@ -1,9 +1,9 @@
 # HAYAGAWARI — Portfolio Motion Generator
 
 <p align="center">
-  <a href="https://shironagasu-ai.github.io/hayagawari/"><img src="docs/media/preview.webp" alt="HAYAGAWARI で作ったポートフォリオ映像（作例: SHIRONAGASU WORKS）" width="720"></a>
+  <a href="https://shironagasu-ai.github.io/hayagawari/"><img src="docs/media/preview.webp" alt="HAYAGAWARI で作ったポートフォリオ映像（作例）" width="720"></a>
 </p>
-<p align="center"><b><a href="https://shironagasu-ai.github.io/hayagawari/">▶ サイトで試す</a></b> ・ 作例: SHIRONAGASU WORKS（冒頭 16 秒。全編は <a href="assets/hero/hero-16x9.mp4">hero-16x9.mp4</a>）</p>
+<p align="center"><b><a href="https://shironagasu-ai.github.io/hayagawari/">▶ サイトで試す</a></b> ・ 作例（冒頭 16 秒。全編は <a href="assets/hero/hero-16x9.mp4">hero-16x9.mp4</a>）</p>
 
 イラストを複数枚アップロードすると、**注目点（目を引く箇所）を解析**して、キビキビ動くモーショングラフィックのポートフォリオ映像を自動生成する Web サービスです。
 **シードごとに振付・トランジション・配色・テンポが変わる**ので、使う人・押すたびに違う映像になります。
@@ -128,7 +128,7 @@ tests/e2e.mjs    … Playwright による E2E テスト
 - HAYAGAWARI 自身の描画から作る。作り直すとき（イラストを差し替えるとき）は:
 
   ```sh
-  FFMPEG=/path/to/ffmpeg node tools/make-hero.mjs --images ./my-illustrations --name "SHIRONAGASU" --seed HERO-01
+  FFMPEG=/path/to/ffmpeg node tools/make-hero.mjs --images ./my-illustrations --name HAYAGAWARI --sub PORTFOLIO --link shironagasu-ai.github.io/hayagawari --seed HERO-01
   ```
 
   `--images` を省くと内蔵サンプルで作る。libx264 入りの ffmpeg が必要（`pip install imageio-ffmpeg` で入る静的ビルドでも可）

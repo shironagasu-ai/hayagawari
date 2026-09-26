@@ -1,5 +1,5 @@
 // トップページ背景のループ動画を作る。リポジトリルートで:
-//   FFMPEG=/path/to/ffmpeg node tools/make-hero.mjs [--images DIR] [--name NAME] [--sub SUBTITLE] [--seed SEED] [--style MIX]
+//   FFMPEG=/path/to/ffmpeg node tools/make-hero.mjs [--images DIR] [--name NAME] [--sub SUBTITLE] [--link URL] [--seed SEED] [--style MIX]
 // --crf で画質（既定 30。小さいほど高画質・大きいファイル）。--images を省略すると内蔵サンプルで作る。画像はファイル名順に並ぶ（先頭の「1 」などの番号はタイトルから除く）。出力: assets/hero/hero-16x9.mp4, hero-9x16.mp4 と各ポスター画像（.jpg）
 //
 // HAYAGAWARI 自身の描画を 1 コマずつ JPEG で取り出し、ffmpeg で H.264（音声なし）に変換する。
@@ -63,6 +63,7 @@ for (const job of JOBS) {
   }
   await page.fill('#artist', args.name || '');
   await page.fill('#subline', args.sub || '');
+  await page.fill('#handle', args.link || '');
   const info = await page.evaluate(({ style, scale }) => {
     const hg = window.__hg;
     if (style) hg.setOpt('style', style);
