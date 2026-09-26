@@ -208,6 +208,11 @@ async function sheet(page, file, rows) {
   await sheet(page, 'sheet-variants.png', vKeys.map((k) => ({ key: 'variant', value: k, seg: 1, times: T })));
   const picked = await page.evaluate(() => { const f = window.__hg.state.film; return [f.opener, f.closer, f.segments[1].variant]; });
   check('opener/closer/variant overrides applied', picked[0] === opKeys[opKeys.length - 1] && picked[1] === clKeys[clKeys.length - 1] && picked[2] === vKeys[vKeys.length - 1], picked.join(','));
+  // 縦長（9:16）でも崩れないか目視確認用
+  await page.evaluate(() => { window.__hg.setOpt('aspect', '9:16'); window.__hg.resize(); });
+  await sheet(page, 'sheet-openers-9x16.png', opKeys.map((k) => ({ key: 'opener', value: k, seg: 0, times: T })));
+  await sheet(page, 'sheet-closers-9x16.png', clKeys.map((k) => ({ key: 'closer', value: k, seg: 'last', times: T })));
+  await page.evaluate(() => { window.__hg.setOpt('aspect', '16:9'); window.__hg.resize(); });
   check('9 choreographies available', vKeys.length >= 9, vKeys.join(','));
 
   // スタイル: 全9種とミックス（作品ごとに抽選・連続しない）
