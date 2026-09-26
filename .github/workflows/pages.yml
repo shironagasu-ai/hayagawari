@@ -89,6 +89,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
+          if [ ! -f tools/check-version.mjs ]; then
+            echo "バージョン管理がまだ入っていないコミットなので何もしない"
+            exit 0
+          fi
           V="$(node tools/check-version.mjs --print)"
           if gh release view "v$V" > /dev/null 2>&1; then
             echo "v$V はリリース済み。何もしない"
