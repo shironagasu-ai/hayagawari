@@ -37,7 +37,7 @@ const state = {
   opener: 'auto',
   closer: 'auto',
   sound: 'full', // 'full' ビート＋効果音 / 'sfx' 効果音のみ / 'off'
-  advOpen: false, // 詳細設定アコーディオンの開閉（作品ごとのタイトル・注目点編集もこれに連動）
+  advOpen: false, // 詳細設定アコーディオンの開閉（映像全体の設定だけ。作品ごとのタイトル・注目点は開閉に関係なく常に反映）
   film: null,
   t: 0,
   playing: false,
@@ -45,6 +45,8 @@ const state = {
   loop: true,
 };
 let nextId = 1;
+// プレーヤーの履歴: entry=積んだ履歴がある / pendingBack=ボタンで閉じて history.back() の反映待ち / reopen=その間に開き直した
+const player = { entry: false, pendingBack: false, reopen: false };
 const hero = { video: $('#hero-video'), visible: true }; // トップの作例動画
 
 // ---------------------------------------------------------------- URL ハッシュ（シード等の共有）
@@ -103,7 +105,7 @@ function updateAdvSummary() {
     const btn = document.querySelector(`#${k} button[data-v="${state[k]}"]`);
     return `${ADV_NAMES[k]} ${btn ? btn.textContent : state[k]}`;
   }).join('・');
-  if (!state.advOpen) el.textContent = 'オフ ・ すべておまかせ（再生のたびにランダム）';
+  if (!state.advOpen) el.textContent = 'オフ ・ 演出はすべておまかせ（再生のたびにランダム）';
   else el.textContent = changed.length ? `反映中: ${list}` : 'オン ・ まだ変更なし';
   el.classList.toggle('changed', state.advOpen && changed.length > 0);
   $('#adv-reset').hidden = !state.advOpen || changed.length === 0;
@@ -150,7 +152,7 @@ function renderWorks() {
     if (a >= 1) { ptbox.style.top = `${(1 - 1 / a) * 50}%`; ptbox.style.bottom = `${(1 - 1 / a) * 50}%`; }
     else { ptbox.style.left = `${(1 - a) * 50}%`; ptbox.style.right = `${(1 - a) * 50}%`; }
     ptbox.innerHTML = pts;
-    thumb.addEventListener('click', () => { if (state.advOpen) openFocalEditor(w, () => { state.film = null; renderWorks(); }); });
+    thumb.addEventListener('click', () => openFocalEditor(w, () => { state.film = null; renderWorks(); }));
     el.querySelector('.x').addEventListener('click', () => removeWork(w.id));
     el.querySelector('input.title').addEventListener('input', (e) => { w.title = e.target.value || 'UNTITLED'; state.film = null; });
     el.addEventListener('dragstart', (e) => { el.classList.add('dragging'); e.dataTransfer.setData('text/x-work', String(w.id)); e.dataTransfer.effectAllowed = 'move'; });
@@ -299,7 +301,7 @@ function clearWorks() {
 
 // ---------------------------------------------------------------- 映像の生成
 
-// 生成に使う設定。閉じている間は詳細設定・手動のタイトル/注目点を使わず、既定（おまかせ）で作る
+// 生成に使う設定。閉じている間は詳細設定を使わず、既定（おまかせ）で作る（作品ごとのタイトル・注目点は常に使う）
 function effectiveSettings() {
   return state.advOpen ? { ...state } : { ...state, ...ADV_DEFAULTS };
 }
@@ -310,7 +312,8 @@ function build() {
   for (const w of state.works) if (!w.tex) w.tex = renderer.createTexture(w.source);
   const [W, H] = ASPECTS[state.aspect];
   const S = effectiveSettings();
-  let works = state.advOpen ? state.works : state.works.map((w) => ({ ...w, title: w.autoTitle, focal: w.autoFocal.map((f) => ({ ...f })) }));
+  // 作品ごとのタイトル・注目点は、詳細設定の開閉に関係なく常に反映する
+  let works = state.works;
   if (S.order === 'shuffle') works = createRng('order|' + state.seed).shuffle(works);
   const t0 = performance.now();
   state.film = buildFilm({
@@ -365,7 +368,12 @@ function play(fromStart = true) {
   if (fromStart) state.t = 0;
   audio.unlock(); // ユーザー操作の中で音を許可
   state.playing = true;
-  body.classList.add('playing');
+  if (!body.classList.contains('playing')) {
+    body.classList.add('playing');
+    // スマホの「戻る」（スワイプ・ブラウザの戻る）でプレーヤーを閉じられるよう、履歴を 1 つ積む
+    if (player.pendingBack) player.reopen = true; // 閉じた直後に開き直した: 戻りが反映されてから積み直す
+    else pushPlayerEntry();
+  }
   $('#play').textContent = '❚❚';
   heroSync();
   syncAudio();
@@ -379,11 +387,17 @@ function pause() {
   state.dirty = true;
 }
 
-function toEditor() {
+// fromHistory: ブラウザの「戻る」で閉じたとき（履歴はもう戻っている）
+function toEditor({ fromHistory = false } = {}) {
   pause();
   body.classList.remove('playing');
   heroSync();
   if (document.fullscreenElement) document.exitFullscreen();
+  if (player.entry) {
+    player.entry = false;
+    if (!fromHistory) { player.pendingBack = true; history.back(); } // ボタンで閉じたときは、積んだ履歴を取り除く
+    else if (state.film && !state.catalogFilm) writeHash(); // 戻った先の URL を今のシードに合わせる
+  }
 }
 
 function reroll() {
@@ -805,7 +819,19 @@ $('#go').addEventListener('click', () => {
 });
 $('#play').addEventListener('click', () => (state.playing ? pause() : play(false)));
 $('#reroll').addEventListener('click', reroll);
-$('#edit').addEventListener('click', toEditor);
+$('#back').addEventListener('click', () => toEditor());
+function pushPlayerEntry() {
+  try { history.pushState(history.state, ''); player.entry = true; } catch { /* 積めなくても動作に影響なし */ }
+}
+window.addEventListener('popstate', () => {
+  if (player.pendingBack) {
+    // ボタンで閉じたときの history.back() が反映された。その間に開き直していたら履歴を積み直す
+    player.pendingBack = false;
+    if (player.reopen) { player.reopen = false; if (body.classList.contains('playing')) pushPlayerEntry(); }
+    return;
+  }
+  if (body.classList.contains('playing') && player.entry) toEditor({ fromHistory: true });
+});
 $('#export').addEventListener('click', openExport);
 $('#snd').addEventListener('click', () => { audio.unlock(); setSound(SOUND_MODES[(SOUND_MODES.indexOf(state.sound) + 1) % SOUND_MODES.length]); });
 $('#xp-start').addEventListener('click', startExport);
@@ -831,7 +857,14 @@ seek.addEventListener('pointerdown', (e) => {
   seek.addEventListener('pointerup', () => seek.removeEventListener('pointermove', move), { once: true });
 });
 
-$('#stage').addEventListener('click', () => { if (body.classList.contains('playing') && !recorder && !state.exporting && $('#xp').hidden) { state.playing ? pause() : play(false); } });
+// 操作が隠れているときの最初のタップは、操作を出すだけ（止めない）
+let tapWhileIdle = false;
+$('#stage').addEventListener('pointerdown', () => { tapWhileIdle = body.classList.contains('idle'); }, { capture: true });
+$('#stage').addEventListener('click', () => {
+  if (!body.classList.contains('playing') || recorder || state.exporting || !$('#xp').hidden) return;
+  if (tapWhileIdle) { tapWhileIdle = false; wake(); return; }
+  state.playing ? pause() : play(false);
+});
 window.addEventListener('pointermove', wake);
 window.addEventListener('resize', () => { if (!recorder && !state.exporting) resize(); poke(); });
 window.addEventListener('keydown', (e) => {
