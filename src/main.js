@@ -9,7 +9,7 @@ import { initFocalEditor, openFocalEditor } from './focal-editor.js';
 import { pickEncoderConfig, pickAudioConfig, exportFrames } from './export.js';
 import { AudioEngine, buildScore, renderScoreOffline, SOUND_MODES, SOUND_LABELS } from './audio.js';
 import { newKey, putImage, saveSession, loadSession, requestPersist } from './store.js';
-import { VERSION, BUILD } from './version.js';
+import { VERSION, BUILD, PREVIEW, storageKey } from './version.js';
 
 const $ = (s) => document.querySelector(s);
 const canvas = $('#gl');
@@ -114,7 +114,7 @@ function setAdvOpen(open) {
   const d = $('#adv');
   if (d.open !== state.advOpen) d.open = state.advOpen;
   body.classList.toggle('adv-open', state.advOpen);
-  try { localStorage.setItem('hg-adv', state.advOpen ? '1' : '0'); } catch { /* 保存できなくても動作に影響なし */ }
+  try { localStorage.setItem(storageKey('hg-adv'), state.advOpen ? '1' : '0'); } catch { /* 保存できなくても動作に影響なし */ }
   state.film = null;
   updateAdvSummary();
   renderWorks();
@@ -351,7 +351,7 @@ function syncAudio() {
 const SOUND_ICON = { full: '🔊', sfx: '🔉', off: '🔇' };
 function setSound(mode) {
   state.sound = SOUND_MODES.includes(mode) ? mode : 'full';
-  try { localStorage.setItem('hg-sound', state.sound); } catch { /* 保存できなくても動作に影響なし */ }
+  try { localStorage.setItem(storageKey('hg-sound'), state.sound); } catch { /* 保存できなくても動作に影響なし */ }
   const b = $('#snd');
   b.textContent = `${SOUND_ICON[state.sound]} ${SOUND_LABELS[state.sound]}`;
   b.classList.toggle('muted', state.sound === 'off');
@@ -676,7 +676,7 @@ function jump(dir) {
 const hashAdv = readHash();
 {
   let snd = 'full';
-  try { snd = localStorage.getItem('hg-sound') || 'full'; } catch { /* プライベートモード等 */ }
+  try { snd = localStorage.getItem(storageKey('hg-sound')) || 'full'; } catch { /* プライベートモード等 */ }
   state.sound = SOUND_MODES.includes(snd) ? snd : 'full';
 }
 $('#seed').value = state.seed;
@@ -775,6 +775,17 @@ setupLogo();
   $('#ver-kicker').textContent = `v${VERSION}`;
   const build = BUILD.commit === 'dev' ? '開発版' : `<a href="${REPO}/commit/${BUILD.commit}" target="_blank" rel="noopener">${BUILD.commit}</a> ・ ${BUILD.date}`;
   $('#ver').innerHTML = `HAYAGAWARI v${VERSION} ・ ${build} ・ <a href="${REPO}/releases" target="_blank" rel="noopener">更新履歴</a> ・ <a href="${REPO}" target="_blank" rel="noopener">GitHub</a>`;
+  // PR のプレビューでは、本番と見分けられるよう常に表示する
+  if (PREVIEW) {
+    const a = document.createElement('a');
+    a.id = 'preview-badge';
+    a.href = `${REPO}/pull/${PREVIEW}`;
+    a.target = '_blank';
+    a.rel = 'noopener';
+    a.textContent = `PREVIEW ・ PR #${PREVIEW}${BUILD.commit === 'dev' ? '' : ` ・ ${BUILD.commit}`}`;
+    body.appendChild(a);
+    $('#ver').insertAdjacentHTML('afterbegin', `<b>PR #${PREVIEW} のプレビュー（保存した作業は本番と別）</b> ・ `);
+  }
 }
 const drop = $('#drop');
 window.addEventListener('dragover', (e) => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); drop.classList.add('over'); } });
@@ -843,8 +854,8 @@ resize();
 {
   let open = false;
   try {
-    const v = localStorage.getItem('hg-adv');
-    open = v !== null ? v === '1' : localStorage.getItem('hg-mode') === 'pro'; // 旧「こだわり」設定からの引き継ぎ
+    const v = localStorage.getItem(storageKey('hg-adv'));
+    open = v !== null ? v === '1' : localStorage.getItem(storageKey('hg-mode')) === 'pro'; // 旧「こだわり」設定からの引き継ぎ
   } catch { /* プライベートモード等 */ }
   if (hashAdv) open = true; // 詳細設定つきで共有された URL は、その設定で再現する
   setAdvOpen(open);

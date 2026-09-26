@@ -3,7 +3,9 @@
 //   kv/"session"   … 設定と作品の並び・タイトル・注目点（小さい。変更のたびに書き直す）
 //   img/<key>      … 画像そのもの（Blob。作品を追加したときに 1 回だけ書く）
 
-const DB_NAME = 'hayagawari';
+import { PREVIEW } from './version.js';
+
+const DB_NAME = PREVIEW ? `hayagawari-pr${PREVIEW}` : 'hayagawari';
 const VERSION = 1;
 let dbp = null;
 

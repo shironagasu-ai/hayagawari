@@ -1,7 +1,6 @@
-# E2E テスト（PR と main へのプッシュ）と、テストが通った main だけを GitHub Pages へ公開する。
-# main でバージョン（src/version.js）が上がっていれば、タグ vX.Y.Z と GitHub Release も作る。
-# Pages の公開元は Settings → Pages → Source を「GitHub Actions」にしておくこと。
-name: CI / Pages
+# テスト（PR と main へのプッシュ）。公開・PR のプレビュー・リリースは pages.yml が
+# このワークフローの完了を受けて行う（テストが通った回だけ）。
+name: CI
 
 on:
   pull_request:
@@ -65,63 +64,3 @@ jobs:
           path: tests/output/
           retention-days: 7
           if-no-files-found: ignore
-
-  deploy:
-    name: Deploy to GitHub Pages
-    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    needs: [version, e2e]
-    runs-on: ubuntu-24.04
-    permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    concurrency:
-      group: pages
-      cancel-in-progress: false
-    steps:
-      - uses: actions/checkout@v7
-      # 公開するのは実行に必要なファイルだけ（tests / docs / package.json などは含めない）
-      - name: Collect site files
-        run: |
-          mkdir _site
-          cp -r index.html src vendor assets LICENSE _site/
-      # サイトのバージョン表記に、公開したコミットと日付を入れる
-      - name: Stamp build info
-        run: |
-          sed -i "s/commit: 'dev', date: ''/commit: '${GITHUB_SHA::7}', date: '$(git log -1 --format=%cs)'/" _site/src/version.js
-          grep -q "commit: '${GITHUB_SHA::7}'" _site/src/version.js
-          cat _site/src/version.js
-      - uses: actions/configure-pages@v6
-      - uses: actions/upload-pages-artifact@v5
-        with:
-          path: _site
-      - id: deployment
-        uses: actions/deploy-pages@v5
-
-  # バージョンが上がっていればタグとリリースを作る（同じバージョンのリリースがあれば何もしない）
-  release:
-    name: Tag & release
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    needs: deploy
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
-      - name: Create release if the version is new
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          V="$(node tools/check-version.mjs --print)"
-          if gh release view "v$V" > /dev/null 2>&1; then
-            echo "v$V はリリース済み。何もしない"
-            exit 0
-          fi
-          node tools/check-version.mjs --notes > notes.md
-          gh release create "v$V" --target "$GITHUB_SHA" --title "v$V" --notes-file notes.md

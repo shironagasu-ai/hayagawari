@@ -14,7 +14,8 @@ const outDir = join(root, 'tests', 'output');
 mkdirSync(outDir, { recursive: true });
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.jpg': 'image/jpeg', '.mp4': 'video/mp4', '.woff2': 'font/woff2' };
 const server = createServer((req, res) => {
-  let p = join(root, decodeURIComponent(req.url.split('?')[0].split('#')[0]));
+  // /pr/<N>/ は PR プレビューの公開場所を模したもの（中身は同じ）
+  let p = join(root, decodeURIComponent(req.url.split('?')[0].split('#')[0]).replace(/^\/pr\/\d+\//, '/'));
   if (existsSync(p) && statSync(p).isDirectory()) p = join(p, 'index.html');
   if (!existsSync(p)) { res.writeHead(404); res.end('nf'); return; }
   res.writeHead(200, { 'content-type': TYPES[extname(p)] || 'application/octet-stream' });
@@ -518,6 +519,31 @@ async function sheet(page, file, rows) {
   await page.waitForTimeout(1500);
   check('after clear: nothing restored, fields kept', await page.evaluate(() => window.__hg.state.works.length === 0 && document.querySelector('#artist').value === 'SAVE TEST'));
   check('no page errors (save/restore)', errors.length === 0, errors.join('\n'));
+  await page.close();
+}
+
+// ---- 8. PR プレビュー（/pr/<N>/）: バッジが出て、保存先が本番と分かれる
+{
+  const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+  page.setDefaultTimeout(120000);
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.goto('http://localhost:8941/pr/42/', { waitUntil: 'networkidle' });
+  const badge = await page.evaluate(() => { const b = document.querySelector('#preview-badge'); return b && { text: b.textContent, href: b.href }; });
+  check('preview badge shown', badge && badge.text.includes('PR #42') && badge.href.endsWith('/pull/42'), JSON.stringify(badge));
+  await page.evaluate(() => window.__hg.loadSamples());
+  await page.waitForFunction(() => window.__hg.state.works.length === 6, null, { timeout: 30000 });
+  await page.evaluate(() => window.__hg.setSound('sfx'));
+  await page.waitForTimeout(1200);
+  const st = await page.evaluate(async () => ({
+    dbs: (await indexedDB.databases()).map((d) => d.name),
+    ls: Object.keys(localStorage),
+  }));
+  check('preview uses separate storage', st.dbs.includes('hayagawari-pr42') && !st.dbs.includes('hayagawari') && st.ls.includes('pr42:hg-sound') && !st.ls.includes('hg-sound'), JSON.stringify(st));
+  // 本番のパスではバッジが出ない
+  await page.goto('http://localhost:8941/', { waitUntil: 'networkidle' });
+  check('no preview badge on production path', await page.evaluate(() => !document.querySelector('#preview-badge') && window.__hg.state.works.length === 0));
+  check('no page errors (preview)', errors.length === 0, errors.join('\n'));
   await page.close();
 }
 

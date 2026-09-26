@@ -1,0 +1,98 @@
+# GitHub Pages の公開（本番と PR のプレビュー）。
+#   本番      https://shironagasu-ai.github.io/hayagawari/        … main でテストが通った最新のコミット
+#   プレビュー https://shironagasu-ai.github.io/hayagawari/pr/<N>/ … 開いている PR の最新のコミット（マージ前の確認用）
+# 「CI」のテストが終わるたび・PR が閉じられたときに、サイト全体を組み立て直して公開する。
+# main でバージョンが上がっていれば、タグ vX.Y.Z と GitHub Release も作る。
+# このワークフローは main にあるものが動く（workflow_run / pull_request_target は既定ブランチの定義を使う）。
+name: Pages
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+  pull_request_target:
+    types: [closed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# 組み立ては毎回「その時点の全体」なので、重なったら順番に（途中で止めない）
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build & deploy site and PR previews
+    # テストが失敗した回では組み立て直さない（main の公開内容は「テストが通った最新」なので影響しない）
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: write
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build site
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash tools/build-pages.sh
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v5
+      # 各 PR に「プレビューの URL」を 1 件だけコメントする（あれば書き換える）
+      - name: Comment preview links on PRs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_URL: ${{ steps.deployment.outputs.page_url }}
+        run: |
+          MARK='<!-- hayagawari-preview -->'
+          while read -r num sha; do
+            [ -n "$num" ] || continue
+            body="$(printf '%s\n**プレビュー**: %spr/%s/\n\n反映したコミット: `%s`（プッシュ後、テストが終わってから数分で更新）\n本番とは保存した作業が別です。PR を閉じるとプレビューも消えます。' "$MARK" "$BASE_URL" "$num" "${sha::7}")"
+            id="$(gh api "repos/$GITHUB_REPOSITORY/issues/$num/comments" --paginate -q ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$MARK\"))) | .id" | head -1)"
+            if [ -n "$id" ]; then
+              gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -f body="$body" > /dev/null
+            else
+              gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$num/comments" -f body="$body" > /dev/null
+            fi
+          done < previews.txt
+
+  release:
+    name: Tag & release
+    needs: deploy
+    # main へのプッシュのテストが通ったときだけ
+    if: github.event_name == 'workflow_run' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Create release if the version is new
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          V="$(node tools/check-version.mjs --print)"
+          if gh release view "v$V" > /dev/null 2>&1; then
+            echo "v$V はリリース済み。何もしない"
+            exit 0
+          fi
+          node tools/check-version.mjs --notes > notes.md
+          gh release create "v$V" --target "$SHA" --title "v$V" --notes-file notes.md
