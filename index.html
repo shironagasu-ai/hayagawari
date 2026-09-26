@@ -247,7 +247,6 @@
   #seek .mark { position: absolute; top: 5px; width: 1px; height: 9px; background: rgba(255,255,255,0.45); }
   .controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .controls .btn { padding: 8px 14px; font-size: 12px; background: rgba(20,20,23,0.8); }
-  .controls .btn.muted { opacity: 0.6; }
   .controls .info { font-family: var(--mono); font-size: 11px; color: #bdbab3; letter-spacing: 0.08em; margin-right: auto; display: flex; gap: 14px; flex-wrap: wrap; }
   .controls .info b { color: #fff; }
   #perf {
@@ -399,7 +398,7 @@
     </div>
 
     <p class="note">
-      操作: Space 再生/停止 ・ R 別バージョン（シード変更）・ ← → 前/次の作品 ・ M 音の切り替え ・ F 全画面 ・ E 編集に戻る ・ P パフォーマンス表示<br>
+      操作: Space 再生/停止 ・ R 別バージョン（シード変更）・ ← → 前/次の作品 ・ F 全画面 ・ E 編集に戻る ・ P パフォーマンス表示<br>
       書き出しは1コマずつ描いて MP4 にします（1080p / 4K・60 / 30fps）。対応していないブラウザでは実時間の録画になります。
     </p>
     <p class="ver" id="ver"></p>
@@ -431,7 +430,6 @@
       <span>BPM <b id="i-bpm">-</b></span>
       <span>SEED <b id="i-seed">-</b></span>
     </div>
-    <button class="btn" id="snd" title="音の切り替え (M)">🔊 ビート＋効果音</button>
     <button class="btn" id="reroll" title="R">🎲 別バージョン</button>
     <button class="btn" id="export">⤓ 書き出し</button>
     <button class="btn" id="fs" title="F">⛶</button>
@@ -462,7 +460,6 @@
     <div class="xp-head"><b>書き出し</b></div>
     <div class="field"><label>RESOLUTION / 解像度</label><div class="seg" id="xp-res"><button data-v="1" class="on">1080p</button><button data-v="2">4K</button></div></div>
     <div class="field"><label>FRAME RATE / フレームレート</label><div class="seg" id="xp-fps"><button data-v="60" class="on">60fps</button><button data-v="30">30fps</button></div></div>
-    <div class="field"><label>SOUND / 音声</label><div class="seg" id="xp-snd"><button data-v="full" class="on">ビート＋効果音</button><button data-v="sfx">効果音のみ</button><button data-v="off">なし</button></div></div>
     <p class="hint" id="xp-info">判定中…</p>
     <div id="xp-progress" hidden><div class="xp-bar"><div id="xp-fill"></div></div><div class="hint" id="xp-status"></div></div>
     <div class="xp-actions"><button class="btn" id="xp-close">閉じる</button><button class="btn primary" id="xp-start">⤓ 書き出す</button></div>

@@ -274,25 +274,6 @@ async function sheet(page, file, rows) {
   check('auto picks all openers/closers', seen.o === opKeys.length && seen.c === clKeys.length, `${seen.o}/${seen.c}`);
   check('auto uses new transitions', seen.tr.includes('spin') && seen.tr.includes('door'));
   check('no clashing variant + decor pairs', seen.clash.length === 0, seen.clash.slice(0, 5).join(', '));
-  // 切り替えごとに効果音が鳴る（カットは着地の一撃で鳴るので除く）
-  const silent = await page.evaluate(async () => {
-    const { buildScore } = await import('/src/audio.js');
-    const { catalogKeys, catalogFilm, loadWorks, TextFactory } = window.__hg.fx;
-    const works = await loadWorks();
-    const tf = new TextFactory(window.__hg.renderer);
-    const out = [];
-    for (const key of catalogKeys('transition')) {
-      if (key === 'cut') continue;
-      const { film } = catalogFilm('transition', key, works, tf);
-      const w0 = film.segments.findIndex((s) => s.kind === 'work');
-      const T = film.segments[w0 + 1].start;
-      const score = buildScore(film, 'SFX', 'sfx');
-      if (!score.notes.some((n) => n.layer === 'sfx' && n.t >= T - 0.5 && n.t <= T + 0.05)) out.push(key);
-      tf.dispose();
-    }
-    return out;
-  });
-  check('every transition has a sound', silent.length === 0, silent.join(', '));
 
   // 注目点エディタ: 開く → ドラッグ移動 → 追加 → 1番にする → 削除 → 自動に戻す
   await page.evaluate(() => window.__hg.toEditor());
@@ -425,11 +406,12 @@ async function sheet(page, file, rows) {
   const info = await page.textContent('#xp-info');
   console.log('export info:', info.replace(/\s+/g, ' ').slice(0, 160));
   check('frame export available', info.includes('1コマずつ'), info);
-  check('export includes audio by default', /音声: .*(AAC|Opus)/.test(info), info);
-  const vcodec = (info.match(/1コマずつ（(\S+) \/ MP4）/) || [])[1], acodec = (info.match(/音声: [^（]*（(\S+)）/) || [])[1];
-  console.log(`codecs: video=${vcodec} audio=${acodec}`);
-  // CI の Google Chrome では H.264 で書き出せるはず（AAC は Linux 版では無いことがあるので記録のみ）
-  if (process.env.EXPECT_H264 === '1') check('H.264 available in Google Chrome', vcodec === 'H.264', `video=${vcodec} audio=${acodec}`);
+  const noSoundUi = await page.evaluate(() => !document.querySelector('#snd') && !document.querySelector('#xp-snd'));
+  check('no sound controls (v1.0.0 has no sound)', !info.includes('音声') && noSoundUi, info);
+  const vcodec = (info.match(/1コマずつ（(\S+) \/ MP4）/) || [])[1];
+  console.log(`codecs: video=${vcodec}`);
+  // CI の Google Chrome では H.264 で書き出せるはず
+  if (process.env.EXPECT_H264 === '1') check('H.264 available in Google Chrome', vcodec === 'H.264', `video=${vcodec}`);
   // GPU なし（ソフトウェア描画＋ソフトウェア VP9）だと 1 秒あたり約 2 コマなので、先頭 3 秒だけ書き出す
   await page.evaluate(() => { window.__hg.xp.limit = 3; });
   const t0 = Date.now();
@@ -443,18 +425,7 @@ async function sheet(page, file, rows) {
   const head = readFileSync(file).subarray(4, 8).toString('latin1');
   check('mp4 starts with ftyp', head === 'ftyp', head);
   const bytes = readFileSync(file).toString('latin1');
-  check('mp4 has an audio track', bytes.includes('soun') && (bytes.includes('Opus') || bytes.includes('mp4a')));
-  const aud = await page.evaluate(async () => {
-    const buf = await window.__hg.state.lastExport.blob.arrayBuffer();
-    const ctx = new OfflineAudioContext(2, 48000, 48000);
-    const ab = await ctx.decodeAudioData(buf);
-    const d = ab.getChannelData(0);
-    let sum = 0, peak = 0;
-    for (let i = 0; i < d.length; i++) { sum += d[i] * d[i]; peak = Math.max(peak, Math.abs(d[i])); }
-    return { dur: ab.duration, rms: Math.sqrt(sum / d.length), peak };
-  });
-  console.log('audio:', JSON.stringify(aud));
-  check('exported audio decodes with sound', Math.abs(aud.dur - 3) < 0.15 && aud.rms > 0.01 && aud.peak <= 1.0, JSON.stringify(aud));
+  check('mp4 has no audio track', !bytes.includes('soun'));
   const v = await page.evaluate(async () => {
     const blob = window.__hg.state.lastExport.blob;
     const film = window.__hg.state.film;
@@ -494,29 +465,6 @@ async function sheet(page, file, rows) {
   check('exported duration matches film', Math.abs(v.dur - v.expected) < 0.2, `${v.dur} vs ${v.expected}`);
   check('exported frames have content', v.stats.every((x) => x > 3), JSON.stringify(v.stats));
   check('renderer restored after export', await page.evaluate(() => window.__hg.renderer.bw < 1920 && !document.body.classList.contains('exporting')));
-  // 楽譜: モードごとの音数・決定性
-  const sc = await page.evaluate(async () => {
-    const { buildScore } = await import('/src/audio.js');
-    const f = window.__hg.state.film, seed = window.__hg.state.seed;
-    const full = buildScore(f, seed, 'full'), sfx = buildScore(f, seed, 'sfx'), off = buildScore(f, seed, 'off');
-    const again = buildScore(f, seed, 'full');
-    return { full: full.notes.length, sfx: sfx.notes.length, off: off.notes.length, beat: full.notes.filter((n) => n.layer === 'beat').length, same: JSON.stringify(full.notes) === JSON.stringify(again.notes) };
-  });
-  console.log('score:', JSON.stringify(sc));
-  check('score: full > sfx > off=0, deterministic', sc.full > sc.sfx && sc.sfx > 0 && sc.off === 0 && sc.beat > 0 && sc.same);
-  // 音声なしで書き出すと音声トラックが無い
-  await page.click('#export');
-  await page.click('#xp-snd button[data-v="off"]');
-  await page.waitForFunction(() => !document.querySelector('#xp-info').textContent.includes('判定中'));
-  await page.evaluate(() => { window.__hg.xp.limit = 1; });
-  const [dl2] = await Promise.all([page.waitForEvent('download', { timeout: 300000 }), page.click('#xp-start')]);
-  const file2 = join(outDir, 'export-mute.mp4');
-  await dl2.saveAs(file2);
-  check('sound off → no audio track', !readFileSync(file2).toString('latin1').includes('soun'));
-  // プレーヤーの音ボタンが 3 段階で切り替わる
-  const labels = [];
-  for (let k = 0; k < 3; k++) { await page.click('#snd'); labels.push(await page.textContent('#snd')); }
-  check('sound button cycles', labels.join('|').includes('効果音のみ') && labels.join('|').includes('なし') && labels.join('|').includes('ビート'), labels.join('|'));
   // 中止できること
   await page.click('#export');
   await page.waitForFunction(() => !document.querySelector('#xp-info').textContent.includes('判定中'));
@@ -605,13 +553,13 @@ async function sheet(page, file, rows) {
   check('preview badge shown', badge && badge.text.includes('PR #42') && badge.href.endsWith('/pull/42'), JSON.stringify(badge));
   await page.evaluate(() => window.__hg.loadSamples());
   await page.waitForFunction(() => window.__hg.state.works.length === 6, null, { timeout: 30000 });
-  await page.evaluate(() => window.__hg.setSound('sfx'));
+  await page.evaluate(() => window.__hg.setAdvOpen(true)); // localStorage に書く設定の例
   await page.waitForTimeout(1200);
   const st = await page.evaluate(async () => ({
     dbs: (await indexedDB.databases()).map((d) => d.name),
     ls: Object.keys(localStorage),
   }));
-  check('preview uses separate storage', st.dbs.includes('hayagawari-pr42') && !st.dbs.includes('hayagawari') && st.ls.includes('pr42:hg-sound') && !st.ls.includes('hg-sound'), JSON.stringify(st));
+  check('preview uses separate storage', st.dbs.includes('hayagawari-pr42') && !st.dbs.includes('hayagawari') && st.ls.includes('pr42:hg-adv') && !st.ls.includes('hg-adv'), JSON.stringify(st));
   // 本番のパスではバッジが出ない
   await page.goto('http://localhost:8941/', { waitUntil: 'networkidle' });
   check('no preview badge on production path', await page.evaluate(() => !document.querySelector('#preview-badge') && window.__hg.state.works.length === 0));
