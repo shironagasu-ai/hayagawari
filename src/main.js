@@ -3,7 +3,7 @@ import { Renderer } from './gl.js';
 import { TextFactory } from './text.js';
 import { analyzeImage } from './analyze.js';
 import { buildFilm } from './director.js';
-import { makeSamples } from './samples.js';
+import { SAMPLES, pickSamples, samplesByFile, fetchSamples } from './samples.js';
 import { randomSeed, createRng } from './rng.js';
 import { initFocalEditor, openFocalEditor } from './focal-editor.js';
 import { pickEncoderConfig, pickAudioConfig, exportFrames } from './export.js';
@@ -722,9 +722,22 @@ $('#file').addEventListener('change', async (e) => {
   e.target.value = '';
   if (fromHero) $('#drop').scrollIntoView({ behavior: 'smooth', block: 'start' });
 });
-$('#sample').addEventListener('click', () => {
-  addSources(makeSamples('samples').map((s) => ({ src: s.canvas, name: s.name })));
-});
+// サンプルを読み込む（files を渡すとその組、なければ 6〜8 点をランダムに）
+async function loadSamples(files) {
+  let list;
+  body.classList.add('busy');
+  try {
+    list = await fetchSamples(files ? samplesByFile(files) : pickSamples());
+  } catch (e) {
+    console.warn(e);
+    toast('サンプルを読み込めませんでした');
+    return;
+  } finally {
+    body.classList.remove('busy');
+  }
+  await addSources(list);
+}
+$('#sample').addEventListener('click', () => loadSamples());
 
 // ---------------------------------------------------------------- トップの作例動画
 
@@ -749,7 +762,7 @@ function setupHero() {
 }
 $('#hero-pick').addEventListener('click', () => { scrollToDrop = true; $('#file').click(); });
 $('#hero-sample').addEventListener('click', async () => {
-  await addSources(makeSamples('samples').map((s) => ({ src: s.canvas, name: s.name })));
+  await loadSamples();
   $('#drop').scrollIntoView({ behavior: 'smooth', block: 'start' });
 });
 setupHero();
@@ -902,16 +915,23 @@ restoreSession();
 
 // ---------------------------------------------------------------- 演出カタログ（#catalog）
 
-let catalogWorks = null;
-async function loadCatalogWorks() {
+let catalogWorks = null; // 読み込み中の Promise（同時に呼ばれても 1 回だけ読む）
+function loadCatalogWorks() {
   if (!catalogWorks) {
-    const list = makeSamples('samples').slice(0, 3);
-    catalogWorks = [];
-    for (const s of list) {
-      const w = await analyzeImage(s.canvas, s.name);
-      w.tex = renderer.createTexture(w.source);
-      catalogWorks.push(w);
-    }
+    catalogWorks = (async () => {
+      // 横長（16:9）・縦長（3:4）・縦長（9:16）を 1 点ずつ。どの演出も同じ組で見比べる
+      const list = await fetchSamples(samplesByFile(['kite-weather', 'ranunculus', 'seaside-descent']));
+      const works = [];
+      for (const s of list) {
+        const w = await analyzeImage(s.src, s.name);
+        w.title = s.title;
+        w.focal = s.focal;
+        w.tex = renderer.createTexture(w.source);
+        works.push(w);
+      }
+      return works;
+    })();
+    catalogWorks.catch(() => { catalogWorks = null; }); // 失敗したら次に開いたときに読み直す
   }
   return catalogWorks;
 }
@@ -941,7 +961,9 @@ window.__hg = {
   fx: { CATEGORIES, labelOf, catalogKeys, catalogFilm, loadWorks: () => loadCatalogWorks(), TextFactory },
   state, renderer, tf,
   build, play, pause, reroll, toEditor, setAdvOpen, openExport, xp, audio, setSound,
-  loadSamples: () => addSources(makeSamples('samples').map((s) => ({ src: s.canvas, name: s.name }))),
+  // テスト用: 既定は先頭 6 点の決まった組（ボタンからはランダム）
+  samples: { SAMPLES, pickSamples },
+  loadSamples: (files = SAMPLES.slice(0, 6).map((x) => x.file)) => loadSamples(files),
   renderAt: (t) => { state.film.render(renderer, t); state.t = t; },
   resize, // resize(scale): 仮想解像度 × scale で描く（tools/make-hero.mjs 用）
   // GPU に溜まった描画命令を最後まで実行させる（1px 読み出しで同期。gl.finish は Chrome では待たない）

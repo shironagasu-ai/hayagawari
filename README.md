@@ -22,7 +22,7 @@
 
 設定値は閉じても保持され、開けば戻ります。開閉状態はブラウザに記憶されます。
 
-1. イラストをドロップ（または「サンプルで試す」）
+1. イラストをドロップ（または「サンプルで試す」。10 点のサンプルから毎回 6〜8 点をランダムに読み込む。サンプルの注目点は見本として手で決めてある）
 2. サムネイルの丸が自動検出した注目点（番号＝優先順、1番が一番見せたい箇所）。サムネイルをクリックすると注目点エディタが開き、移動・追加・削除・優先順・寄りの範囲を編集できる。カードのドラッグで並べ替え
 3. 名前・比率（16:9 / 9:16 / 1:1）・テンポ・スタイル・オープニング・エンディング・シードを選んで「▶ 映像を生成して再生」
 4. 🎲（または R キー）で別バージョン。気に入ったら「⤓ 書き出し」で MP4 を保存
@@ -85,7 +85,7 @@ src/gl.js        … WebGL2 レンダラー（マスク・方向ブラー・ト�
 src/text.js      … 文字のテクスチャ化
 src/ease.js      … イージング（タメツメ用の cubic-bezier / 予備動作付き加速など）
 src/rng.js       … シード付き乱数
-src/samples.js   … サンプル用のプロシージャル・イラスト
+src/samples.js   … サンプル画像（assets/samples/）の一覧・タイトル・注目点、ランダムに選ぶ処理
 tests/e2e.mjs    … Playwright による E2E テスト
 ```
 
@@ -158,7 +158,9 @@ npm ci && npm test              # E2E（Chromium は CHROMIUM_PATH で指定可�
 
 ## ライセンス / クレジット
 
-MIT
+MIT（ソースコード）
+
+**サンプル画像・作例は MIT の対象外です。** `assets/samples/`・`assets/hero/`・`docs/media/preview.webp` のイラストは作者が権利を保持しており（All rights reserved）、HAYAGAWARI のデモとして表示するためだけに置いています。複製・再配布・ほかでの利用はできません。フォークして公開するときは削除するか差し替えてください（詳細は [`assets/samples/NOTICE.md`](assets/samples/NOTICE.md)）。
 
 ロゴ書体: [Archivo](https://github.com/Omnibus-Type/Archivo)（SIL Open Font License 1.1, © The Archivo Project Authors）をロゴの 7 文字だけに絞って `assets/fonts/archivo-logo.woff2` に同梱（約 4KB）。ライセンス文は `assets/fonts/ARCHIVO-OFL.txt`
 

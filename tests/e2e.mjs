@@ -12,7 +12,7 @@ try { ({ chromium } = await import('playwright-core')); } catch { ({ chromium } 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const outDir = join(root, 'tests', 'output');
 mkdirSync(outDir, { recursive: true });
-const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.jpg': 'image/jpeg', '.mp4': 'video/mp4', '.woff2': 'font/woff2' };
+const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.jpg': 'image/jpeg', '.mp4': 'video/mp4', '.woff2': 'font/woff2', '.webp': 'image/webp' };
 const server = createServer((req, res) => {
   // /pr/<N>/ は PR プレビューの公開場所を模したもの（中身は同じ）
   let p = join(root, decodeURIComponent(req.url.split('?')[0].split('#')[0]).replace(/^\/pr\/\d+\//, '/'));
@@ -101,10 +101,32 @@ async function sheet(page, file, rows) {
   await page.waitForFunction(() => window.__hg.state.works.length === 6, null, { timeout: 30000 });
   const focal = await page.evaluate(() => window.__hg.state.works.map((w) => ({ name: w.name, f: w.focal.map((p) => [+p.x.toFixed(2), +p.y.toFixed(2), +p.size.toFixed(2)]) })));
   console.log('focal points:', JSON.stringify(focal));
-  // 顔サンプルは目（y≈0.43, x≈0.41/0.59）付近を検出してほしい
-  const face = focal.find((w) => w.name === 'Aqua Gaze');
-  const nearEyes = face.f.some(([x, y]) => Math.abs(y - 0.44) < 0.12 && Math.abs(x - 0.5) < 0.2);
-  check('portrait sample: focal near eyes', nearEyes);
+  // サンプルは手で決めた注目点で読み込まれる（Ranunculus の 1 番は顔）
+  const ranun = focal.find((w) => w.name === 'Ranunculus');
+  check('sample uses its preset focal points', ranun && Math.abs(ranun.f[0][0] - 0.6) < 0.01 && Math.abs(ranun.f[0][1] - 0.3) < 0.01, JSON.stringify(ranun));
+  // 自動検出（解析）そのもの: Ranunculus の花（x≈0.75, y≈0.42）を拾う
+  const auto = await page.evaluate(() => window.__hg.state.works.find((w) => w.name === 'Ranunculus').autoFocal.map((p) => [p.x, p.y]));
+  check('auto focal finds the flower in Ranunculus', auto.some(([x, y]) => Math.abs(x - 0.75) < 0.1 && Math.abs(y - 0.42) < 0.1), JSON.stringify(auto));
+  // 全サンプルの画像が読めて、ランダムの組は 6〜8 点・重複なし
+  const smp = await page.evaluate(async () => {
+    const { SAMPLES, pickSamples } = window.__hg.samples;
+    const bad = [];
+    for (const x of SAMPLES) {
+      const r = await fetch(`assets/samples/${x.file}.webp`);
+      try { if (!r.ok) throw new Error(r.status); await createImageBitmap(await r.blob()); } catch (e) { bad.push(`${x.file}: ${e.message}`); }
+      if (!x.title || x.focal.length < 1) bad.push(`${x.file}: no title/focal`);
+    }
+    const sizes = new Set();
+    let dup = 0;
+    for (let i = 0; i < 100; i++) {
+      const l = pickSamples(`t${i}`);
+      sizes.add(l.length);
+      if (new Set(l.map((x) => x.file)).size !== l.length) dup++;
+    }
+    return { n: SAMPLES.length, bad, sizes: [...sizes].sort(), dup };
+  });
+  check('every sample image loads', smp.bad.length === 0 && smp.n >= 8, JSON.stringify(smp.bad));
+  check('random sample set is 6-8 distinct works', JSON.stringify(smp.sizes) === '[6,7,8]' && smp.dup === 0, JSON.stringify(smp));
 
   await page.click('#go');
   await page.waitForTimeout(300);
@@ -691,21 +713,22 @@ for (const [name, vp, file] of [['desktop', { width: 1440, height: 900 }, 'hero-
     await page.waitForFunction(() => document.querySelector('#hero-video').currentTime > 0.5, null, { timeout: 30000 });
     check(`hero video plays (${name})`, true);
     await page.click('#hero-sample');
-    await page.waitForFunction(() => window.__hg.state.works.length === 6, null, { timeout: 30000 });
+    await page.waitForFunction(() => window.__hg.state.works.length >= 6 && !document.body.classList.contains('busy'), null, { timeout: 30000 });
     await page.click('#go');
     await page.waitForTimeout(500);
     check(`hero video pauses during playback (${name})`, await page.evaluate(() => document.querySelector('#hero-video').paused));
   } else {
     console.log(`(hero video playback skipped: no H.264 in this browser)`);
     await page.click('#hero-sample');
-    await page.waitForFunction(() => window.__hg.state.works.length === 6, null, { timeout: 30000 });
+    await page.waitForFunction(() => window.__hg.state.works.length >= 6 && !document.body.classList.contains('busy'), null, { timeout: 30000 });
   }
   if (name === 'desktop') {
     const pkgVersion = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version;
     const ver = await page.evaluate(() => ({ kicker: document.querySelector('#ver-kicker').textContent, footer: document.querySelector('#ver').textContent, v: window.__hg.version }));
     check('version shown on site', ver.v === pkgVersion && ver.kicker === `v${pkgVersion}` && ver.footer.includes(`v${pkgVersion}`) && ver.footer.includes('更新履歴'), JSON.stringify(ver));
   }
-  check(`hero sample button loads samples (${name})`, await page.evaluate(() => window.__hg.state.works.length === 6));
+  const nHero = await page.evaluate(() => window.__hg.state.works.length);
+  check(`hero sample button loads 6-8 random samples (${name})`, nHero >= 6 && nHero <= 8, String(nHero));
   await page.evaluate(() => { document.querySelector('#editor').scrollTop = 0; });
   await page.screenshot({ path: join(outDir, `hero-${name}.png`) });
   check(`no page errors (hero ${name})`, errors.length === 0, errors.join('\n'));

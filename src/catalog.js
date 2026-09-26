@@ -102,7 +102,13 @@ export function initCatalog({ renderer, loadWorks, play, restore }) {
         if (busyElsewhere()) break;
         const card = queue.shift();
         if (!card.isConnected) continue;
-        if (!works) works = await loadWorks();
+        if (!works) {
+          try { works = await loadWorks(); } catch (e) {
+            console.warn('カタログの見本を読み込めませんでした', e);
+            card.dataset.done = ''; // 次に見えたときにもう一度試す
+            break;
+          }
+        }
         drawThumb(card);
         await new Promise((r) => setTimeout(r, 0));
       }
