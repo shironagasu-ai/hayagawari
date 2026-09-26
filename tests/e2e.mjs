@@ -258,18 +258,41 @@ async function sheet(page, file, rows) {
   const seen = await page.evaluate(() => {
     window.__hg.setOpt('opener', 'auto'); window.__hg.setOpt('closer', 'auto'); window.__hg.setOpt('variant', null);
     const o = new Set(), c = new Set(), v = new Set(), tr = new Set();
+    const clash = [];
     // 候補が増えても取りこぼさないよう多めに（16 種を 200 回なら、1 種でも出ない確率は 1e-4 程度）
     for (let i = 0; i < 200; i++) {
       window.__hg.setSeed('S' + i); window.__hg.setOpt('style', 'auto'); window.__hg.build();
       const f = window.__hg.state.film;
       o.add(f.opener); c.add(f.closer);
       f.summary.forEach((s) => { if (s.variant) v.add(s.variant); if (s.out) tr.add(s.out); });
+      // 合わない組み合わせ（見せ方 × 背景の飾り）が出ていないか
+      f.summary.forEach((s) => { if (s.kind === 'work') for (const d of s.decor) if ((window.__hg.fx.AVOID_DECOR[s.variant] || []).includes(d)) clash.push(`${s.variant}+${d}`); });
     }
-    return { o: o.size, c: c.size, v: v.size, tr: [...tr].sort().join(',') };
+    return { o: o.size, c: c.size, v: v.size, tr: [...tr].sort().join(','), clash };
   });
   console.log('auto coverage:', JSON.stringify(seen));
   check('auto picks all openers/closers', seen.o === opKeys.length && seen.c === clKeys.length, `${seen.o}/${seen.c}`);
   check('auto uses new transitions', seen.tr.includes('spin') && seen.tr.includes('door'));
+  check('no clashing variant + decor pairs', seen.clash.length === 0, seen.clash.slice(0, 5).join(', '));
+  // 切り替えごとに効果音が鳴る（カットは着地の一撃で鳴るので除く）
+  const silent = await page.evaluate(async () => {
+    const { buildScore } = await import('/src/audio.js');
+    const { catalogKeys, catalogFilm, loadWorks, TextFactory } = window.__hg.fx;
+    const works = await loadWorks();
+    const tf = new TextFactory(window.__hg.renderer);
+    const out = [];
+    for (const key of catalogKeys('transition')) {
+      if (key === 'cut') continue;
+      const { film } = catalogFilm('transition', key, works, tf);
+      const w0 = film.segments.findIndex((s) => s.kind === 'work');
+      const T = film.segments[w0 + 1].start;
+      const score = buildScore(film, 'SFX', 'sfx');
+      if (!score.notes.some((n) => n.layer === 'sfx' && n.t >= T - 0.5 && n.t <= T + 0.05)) out.push(key);
+      tf.dispose();
+    }
+    return out;
+  });
+  check('every transition has a sound', silent.length === 0, silent.join(', '));
 
   // 注目点エディタ: 開く → ドラッグ移動 → 追加 → 1番にする → 削除 → 自動に戻す
   await page.evaluate(() => window.__hg.toEditor());

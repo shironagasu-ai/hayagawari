@@ -36,6 +36,12 @@ export const PALETTES = {
   blueprint: () => ({ bg: [0.06, 0.19, 0.42], ink: [0.9, 0.95, 1], accent: [0.55, 0.86, 1], fixedAccent: true }),
   // 墨と朱: 和紙の地に墨の文字、朱のアクセント（固定）
   sumi: () => ({ bg: [0.95, 0.93, 0.88], ink: [0.08, 0.08, 0.08], accent: [0.84, 0.2, 0.12], fixedAccent: true }),
+  // RISO: 印刷用紙に青インク、蛍光ピンクの 2 色刷り（固定）
+  riso: () => ({ bg: [0.96, 0.94, 0.9], ink: [0.1, 0.24, 0.62], accent: [1, 0.33, 0.58], fixedAccent: true }),
+  // CINEMA: 深い青緑の闇に、温かい白の文字と橙のアクセント（ティール＆オレンジ）
+  cinema: () => ({ bg: [0.03, 0.09, 0.1], ink: [0.96, 0.92, 0.84], accent: [0.98, 0.6, 0.26], fixedAccent: true }),
+  // ZINE: コピー用紙の灰白に黒、作品の色を 1 色だけ特色で
+  zine: ({ ah }) => ({ bg: [0.89, 0.89, 0.86], ink: [0.05, 0.05, 0.05], accent: hsl(ah, 0.9, 0.48) }),
 };
 
 export const PALETTE_KEYS = () => Object.keys(PALETTES);

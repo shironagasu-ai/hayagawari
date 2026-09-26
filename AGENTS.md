@@ -134,7 +134,7 @@ v1.0.0 のように複数の PR にまたがる版は、途中の状態を本番
   FFMPEG=/path/to/ffmpeg node tools/make-hero.mjs --images ./my-illustrations --name HAYAGAWARI --sub PORTFOLIO --link shironagasu-ai.github.io/hayagawari --seed HERO-01
   ```
 
-  `--images` を省くとサンプル画像で作る。libx264 入りの ffmpeg が必要（`pip install imageio-ffmpeg` で入る静的ビルドでも可）
+  `--images` を省くとサンプル画像（`assets/samples/` の全点）で作る。libx264 入りの ffmpeg が必要（`pip install imageio-ffmpeg` で入る静的ビルドでも可）
 - iPhone を含めて自動再生できるよう **H.264・音声なし**。解像度は 1280×720 / 720×1280、9 作品・約 45 秒で 1 本 3.5MB 前後（`--crf` で調整）
 - 画面外・映像の再生中・タブ非表示のときは止める。「動きを減らす」設定ではポスター画像のみ
 - 作例のクレジット表記は `index.html` の `#hero-credit`

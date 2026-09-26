@@ -23,6 +23,9 @@ const KITS = {
   NEON:      { kick: { f0: 150, f1: 48, decay: 0.32, gain: 0.95, drive: 1.5 }, hat: { hp: 9000, decay: 0.03, gain: 0.22 }, clap: { bp: 1800, gain: 0.4 }, bass: { type: 'sawtooth', gain: 0.24, cutoff: 1200 } },
   PASTEL:    { kick: { f0: 110, f1: 55, decay: 0.2, gain: 0.45 }, hat: { hp: 6000, decay: 0.06, gain: 0.1 }, clap: null, bass: { type: 'sine', gain: 0.3, cutoff: 300 }, pluck: { gain: 0.16 } },
   RETRO:     { kick: { f0: 120, f1: 45, decay: 0.35, gain: 0.8 }, hat: { hp: 4500, decay: 0.05, gain: 0.12 }, clap: { bp: 1100, gain: 0.3 }, bass: { type: 'triangle', gain: 0.35, cutoff: 500 }, lowpass: 5200, crackle: true },
+  RISO:      { kick: { f0: 150, f1: 52, decay: 0.25, gain: 0.85 }, hat: { hp: 8500, decay: 0.04, gain: 0.2 }, clap: { bp: 1900, gain: 0.4 }, bass: { type: 'square', gain: 0.2, cutoff: 800 }, pluck: { gain: 0.14 } },
+  CINEMA:    { kick: { f0: 90, f1: 35, decay: 0.7, gain: 1.0 }, hat: { hp: 5500, decay: 0.07, gain: 0.08 }, clap: null, bass: { type: 'sine', gain: 0.55, cutoff: 250 }, lowpass: 7000 },
+  ZINE:      { kick: { f0: 140, f1: 45, decay: 0.3, gain: 0.85, drive: 2 }, hat: { hp: 6000, decay: 0.05, gain: 0.18, crush: 8 }, clap: { bp: 1300, gain: 0.4 }, bass: { type: 'triangle', gain: 0.3, cutoff: 600 }, crackle: true },
 };
 
 // マイナーペンタトニック（半音）
@@ -276,6 +279,12 @@ export function buildScore(film, seed, mode = 'full') {
       case 'bars': add(T - 0.34, 'whoosh', { dur: 0.5, f0: 900, f1: 2500, gain: 0.4, q: 0.8 }, 'sfx'); break;
       case 'iris': add(T - 0.05, 'pluck', { freq: 1760, gain: 0.25 }, 'sfx'); add(T - 0.3, 'whoosh', { dur: 0.3, f0: 3000, f1: 800, gain: 0.25 }, 'sfx'); break;
       case 'glitch': add(T - 0.2, 'glitch', { gain: 0.28 }, 'sfx'); break;
+      case 'pixelate': add(T - 0.2, 'glitch', { gain: 0.16 }, 'sfx'); add(T, 'tick', { gain: 0.22, freq: 1200 }, 'sfx'); break;
+      case 'dissolve': add(T - 0.34, 'whoosh', { dur: 0.5, f0: 6000, f1: 1500, gain: 0.25, q: 0.7 }, 'sfx'); break;
+      case 'halftone': for (let k = 0; k < 4; k++) add(T - 0.3 + k * 0.08, 'tick', { gain: 0.14 + k * 0.03, freq: 2400 - k * 300 }, 'sfx'); break;
+      case 'diamond': add(T - 0.05, 'pluck', { freq: 1320, gain: 0.22 }, 'sfx'); add(T - 0.3, 'whoosh', { dur: 0.3, f0: 2500, f1: 900, gain: 0.22 }, 'sfx'); break;
+      case 'tv': add(T - 0.34, 'whoosh', { dur: 0.3, f0: 7000, f1: 200, gain: 0.35, q: 3 }, 'sfx'); add(T - 0.04, 'tick', { gain: 0.3, freq: 900 }, 'sfx'); break;
+      case 'flip': add(T - 0.22, 'whoosh', { dur: 0.22, f0: 1200, f1: 3500, gain: 0.3, q: 1.5 }, 'sfx'); add(T, 'tick', { gain: 0.22, freq: 1500 }, 'sfx'); break;
       case 'cut': default: break; // カットは下の flash イベントの一撃で鳴る
     }
     // 最初の作品へ入る直前の盛り上げ

@@ -12,6 +12,7 @@ import { newKey, putImage, saveSession, loadSession, requestPersist } from './st
 import { VERSION, BUILD, PREVIEW, storageKey } from './version.js';
 import { initCatalog, catalogFilm, catalogKeys } from './catalog.js';
 import { CATEGORIES, labelOf } from './fx/labels.js';
+import { AVOID_DECOR } from './fx/rules.js';
 
 const $ = (s) => document.querySelector(s);
 const canvas = $('#gl');
@@ -702,6 +703,9 @@ $('#seed').value = state.seed;
 for (const cat of ['opener', 'closer']) {
   $('#' + cat).insertAdjacentHTML('beforeend', catalogKeys(cat).map((k) => `<button data-v="${k}">${labelOf(cat, k)[0]}</button>`).join(''));
 }
+// スタイルも同じ（ミックスは最後に）
+$('#style').insertAdjacentHTML('beforeend', catalogKeys('style').filter((k) => k !== 'MIX').map((k) => `<button data-v="${k}">${labelOf('style', k)[0]}</button>`).join('')
+  + '<button data-v="MIX" title="作品ごとにスタイルを抽選">ミックス</button>');
 bindSeg('#aspect', 'aspect');
 bindSeg('#pace', 'pace');
 bindSeg('#style', 'style');
@@ -962,7 +966,7 @@ catalog.sync();
 // テスト・デバッグ用フック
 window.__hg = {
   version: VERSION, build: BUILD, catalog,
-  fx: { CATEGORIES, labelOf, catalogKeys, catalogFilm, loadWorks: () => loadCatalogWorks(), TextFactory },
+  fx: { CATEGORIES, labelOf, catalogKeys, catalogFilm, loadWorks: () => loadCatalogWorks(), TextFactory, AVOID_DECOR },
   state, renderer, tf,
   build, play, pause, reroll, toEditor, setAdvOpen, openExport, xp, audio, setSound,
   // テスト用: 既定は先頭 6 点の決まった組（ボタンからはランダム）

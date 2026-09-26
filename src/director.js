@@ -21,6 +21,7 @@ import { VARIANTS, VARIANT_KEYS } from './fx/variants.js';
 import { EXIT_DUR, ENTRY_DUR, transitionHint, drawBars, TRANSITION_KEYS, GAP_TRANSITIONS } from './fx/transitions.js';
 import { OPENERS } from './fx/openers.js';
 import { CLOSERS } from './fx/closers.js';
+import { AVOID_DECOR } from './fx/rules.js';
 
 export { THEMES, STYLE_KEYS, VARIANT_KEYS };
 
@@ -111,8 +112,9 @@ export function buildFilm(opts) {
       points: pointsFor(work, 3, srng),
       event: (t, kind, amt, dur, color) => addEvent(start + t, kind, amt, dur, color),
     };
-    const dkeys = [srng.weighted(wtheme.decor, decorKeys.slice(-1))];
-    if (srng.chance(0.35)) dkeys.push(srng.weighted(wtheme.decor, dkeys));
+    const avoid = AVOID_DECOR[vkey] || []; // 見せ方と合わない飾りは選ばない
+    const dkeys = [srng.weighted(wtheme.decor, [...decorKeys.slice(-1), ...avoid])];
+    if (srng.chance(0.35)) dkeys.push(srng.weighted(wtheme.decor, [...dkeys, ...avoid]));
     decorKeys.push(dkeys[0]);
     if (DECORS[opts.decor]) dkeys.splice(0, dkeys.length, opts.decor);
     const decors = dkeys.map((k) => DECORS[k](S));
