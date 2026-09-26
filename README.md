@@ -1,5 +1,10 @@
 # HAYAGAWARI — Portfolio Motion Generator
 
+<p align="center">
+  <a href="https://shironagasu-ai.github.io/hayagawari/"><img src="docs/media/preview.webp" alt="HAYAGAWARI で作ったポートフォリオ映像（作例）" width="720"></a>
+</p>
+<p align="center"><b><a href="https://shironagasu-ai.github.io/hayagawari/">▶ サイトで試す</a></b> ・ 作例（冒頭 16 秒。全編は <a href="assets/hero/hero-16x9.mp4">hero-16x9.mp4</a>）</p>
+
 イラストを複数枚アップロードすると、**注目点（目を引く箇所）を解析**して、キビキビ動くモーショングラフィックのポートフォリオ映像を自動生成する Web サービスです。
 **シードごとに振付・トランジション・配色・テンポが変わる**ので、使う人・押すたびに違う映像になります。
 
@@ -21,6 +26,13 @@
 2. サムネイルの丸が自動検出した注目点（番号＝優先順、1番が一番見せたい箇所）。サムネイルをクリックすると注目点エディタが開き、移動・追加・削除・優先順・寄りの範囲を編集できる。カードのドラッグで並べ替え
 3. 名前・比率（16:9 / 9:16 / 1:1）・テンポ・スタイル・オープニング・エンディング・シードを選んで「▶ 映像を生成して再生」
 4. 🎲（または R キー）で別バージョン。気に入ったら「⤓ 書き出し」で MP4 を保存
+
+### 作業の保存
+
+- 追加した画像・入力欄・シード・詳細設定・作品ごとのタイトルと手で直した注目点を、**このブラウザの中（IndexedDB）に自動で保存**し、次に開いたとき（スマホでタブが破棄されて読み込み直されたときも）元に戻す。外部には送信しない
+- 共有された URL にシード等が入っている場合は、URL の指定を優先する
+- 作品一覧の「すべて外す」で、画像と保存した画像をまとめて消せる（名前などの入力は残る）
+- 保存するのは直近の作業 1 件。ブラウザの設定やストレージ整理で消えることはある（Safari は長期間開かないと消すことがある）
 
 ### 書き出し
 
@@ -74,21 +86,61 @@ tests/e2e.mjs    … Playwright による E2E テスト
 - カットは BPM の拍頭に置き、動きは「溜めて（ほぼ静止 or 微速ドリフト）→ 数フレームで詰める → ピタッと止める」で設計
 - 詳細な設計は [docs/design.md](docs/design.md)
 
+## バージョン管理
+
+[セマンティック バージョニング](https://semver.org/lang/ja/)（`MAJOR.MINOR.PATCH`）。変更の記録は [CHANGELOG.md](CHANGELOG.md)、各版は [Releases](https://github.com/shironagasu-ai/hayagawari/releases)。
+
+| 上げる桁 | いつ | 例 |
+|---|---|---|
+| MAJOR | 保存した作業が読めなくなる・URL の設定の意味が変わる・使い方が大きく変わる | 保存形式の作り直し、設定項目の廃止 |
+| MINOR | 機能・演出・スタイルの追加 | オープニングの追加、新しい設定 |
+| PATCH | 不具合の修正・見た目の微調整 | 表示崩れ、効果音の修正 |
+
+補足: **同じシードで同じ映像になるのは同じバージョンの中だけ**。演出の候補が増える MINOR 以上の更新では、共有された URL でも以前と違う映像になることがある（CHANGELOG に明記する）。
+
+**リリースの手順**
+
+1. PR で `src/version.js` の `VERSION`・`package.json` の `version`（`npm version X.Y.Z --no-git-tag-version` で lock も一緒に更新）・`CHANGELOG.md`（`## [Unreleased]` の中身を `## [X.Y.Z] - 日付` に移す）をそろえる。CI の「Version check」で一致を確認する
+2. main にマージすると、テスト → Pages 公開 → **タグ `vX.Y.Z` と GitHub Release の作成**（本文は CHANGELOG の該当の節）まで自動で行う。バージョンを上げていないマージでは公開だけ行い、リリースは作らない
+3. サイトではトップの「PORTFOLIO MOTION GENERATOR」の横と、ページ下部に `vX.Y.Z ・ コミット ・ 日付` を表示する（コミットと日付は公開時に CI が書き込む。ローカルでは「開発版」）
+
 ## 自動テストと公開（GitHub Actions）
 
 | ワークフロー | いつ | 何を |
 |---|---|---|
-| `ci.yml`（CI） | PR・main へのプッシュ | E2E テスト（Playwright の Chromium と一般配布の Google Chrome。Chrome では H.264 で書き出せることも確認）。スクリーンショットと書き出した動画は実行結果の Artifacts から 7 日間ダウンロードできる |
-| `pages.yml`（Pages） | CI が通るたび・PR を閉じたとき | サイト全体を組み立てて GitHub Pages に公開（下記） |
+| `ci.yml`（CI） | PR・main へのプッシュ | バージョンの一致確認と E2E テスト（Playwright の Chromium と一般配布の Google Chrome。Chrome では H.264 の書き出しと作例動画の再生も確認）。スクリーンショットと書き出した動画は実行結果の Artifacts から 7 日間ダウンロードできる |
+| `pages.yml`（Pages） | CI が通るたび・PR を閉じたとき | サイト全体を組み立てて GitHub Pages に公開（下記）。main でバージョンが上がっていればタグ `vX.Y.Z` と GitHub Release を作る |
 
 **公開される場所**
 
 - 本番: https://shironagasu-ai.github.io/hayagawari/ … main で**テストが通った最新のコミット**
-- **PR のプレビュー**: `https://shironagasu-ai.github.io/hayagawari/pr/<PR番号>/` … 開いている PR の最新のコミット。**main にマージする前に実機で確認する用**。URL は PR にコメントされる（プッシュのたびに更新）
+- **PR のプレビュー**: `https://shironagasu-ai.github.io/hayagawari/pr/<PR番号>/` … 開いている PR の最新のコミット。**main にマージする前に実機で確認する用**。URL は PR にコメントされる（プッシュのたびに更新）。画面右上に黄色の `PREVIEW ・ PR #番号` が出る
+  - プレビューは本番と同じドメインなので、保存した作業（IndexedDB・localStorage）は名前を分けてあり、本番の作業には触らない
   - 同じリポジトリのブランチからの PR だけ載せる（フォークからの PR は載せない）。PR を閉じると消える。検索エンジンには載せない（noindex）
   - PR のコードは Pages の組み立て中に実行しない（ファイルを取り出して置くだけ）
 - `tools/build-pages.sh` が組み立てを行う（公開するのは `index.html` / `src` / `vendor` / `assets` / `LICENSE` のみ）
 - 事前設定: Settings → Pages → Build and deployment → Source を **GitHub Actions** にする（設定済み）
+
+## トップの作例動画
+
+トップ画面の背景で流れる動画は `assets/hero/` にある。縦長の画面では `hero-9x16`、それ以外は `hero-16x9` を使う（各 `.mp4` と、読み込み前・動きを減らす設定用のポスター画像 `.jpg`）。
+
+- HAYAGAWARI 自身の描画から作る。作り直すとき（イラストを差し替えるとき）は:
+
+  ```sh
+  FFMPEG=/path/to/ffmpeg node tools/make-hero.mjs --images ./my-illustrations --name HAYAGAWARI --sub PORTFOLIO --link shironagasu-ai.github.io/hayagawari --seed HERO-01
+  ```
+
+  `--images` を省くと内蔵サンプルで作る。libx264 入りの ffmpeg が必要（`pip install imageio-ffmpeg` で入る静的ビルドでも可）
+- iPhone を含めて自動再生できるよう **H.264・音声なし**。解像度は 1280×720 / 720×1280、9 作品・約 45 秒で 1 本 3.5MB 前後（`--crf` で調整）
+- 画面外・映像の再生中・タブ非表示のときは止める。「動きを減らす」設定ではポスター画像のみ
+- 作例のクレジット表記は `index.html` の `#hero-credit`
+
+README 冒頭のプレビュー（`docs/media/preview.webp`、アニメーション WebP）は横長動画の冒頭 16 秒を 720px・20fps にしたもの。GitHub の README はリポジトリ内の MP4 をその場で再生できないため画像にしている。作り直すとき:
+
+```sh
+ffmpeg -t 16 -i assets/hero/hero-16x9.mp4 -vf "fps=20,scale=720:-1:flags=lanczos" -c:v libwebp_anim -quality 55 -compression_level 6 -loop 0 docs/media/preview.webp
+```
 
 ## ローカルで動かす / テスト
 
@@ -100,5 +152,7 @@ npm ci && npm test              # E2E（Chromium は CHROMIUM_PATH で指定可�
 ## ライセンス / クレジット
 
 MIT
+
+ロゴ書体: [Archivo](https://github.com/Omnibus-Type/Archivo)（SIL Open Font License 1.1, © The Archivo Project Authors）をロゴの 7 文字だけに絞って `assets/fonts/archivo-logo.woff2` に同梱（約 4KB）。ライセンス文は `assets/fonts/ARCHIVO-OFL.txt`
 
 同梱ライブラリ: [mp4-muxer](https://github.com/Vanilagy/mp4-muxer) 5.2.2（MIT, © Vanilagy）— ライセンス文は `vendor/MP4-MUXER-LICENSE`。開発は終了しており後継は Mediabunny（MPL-2.0・約 670KB）だが、単一映像トラックの MP4 化には十分で小さい（約 69KB）ためこちらを採用。書き出し時にだけ読み込む

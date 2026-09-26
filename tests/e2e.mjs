@@ -12,9 +12,10 @@ try { ({ chromium } = await import('playwright-core')); } catch { ({ chromium } 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const outDir = join(root, 'tests', 'output');
 mkdirSync(outDir, { recursive: true });
-const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.png': 'image/png' };
+const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.jpg': 'image/jpeg', '.mp4': 'video/mp4', '.woff2': 'font/woff2' };
 const server = createServer((req, res) => {
-  let p = join(root, decodeURIComponent(req.url.split('?')[0].split('#')[0]));
+  // /pr/<N>/ は PR プレビューの公開場所を模したもの（中身は同じ）
+  let p = join(root, decodeURIComponent(req.url.split('?')[0].split('#')[0]).replace(/^\/pr\/\d+\//, '/'));
   if (existsSync(p) && statSync(p).isDirectory()) p = join(p, 'index.html');
   if (!existsSync(p)) { res.writeHead(404); res.end('nf'); return; }
   res.writeHead(200, { 'content-type': TYPES[extname(p)] || 'application/octet-stream' });
@@ -37,6 +38,12 @@ async function openPage(viewport, hash = '') {
   page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
   page.on('console', (m) => { if (m.type() === 'error') errors.push('console: ' + m.text()); });
   await page.goto(`http://localhost:8941/${hash}`, { waitUntil: 'networkidle' });
+  // アプリが起動しなかった（WebGL2 が使えない等）ときは、画面の表示とエラーを出して原因を分かるようにする
+  const started = await page.waitForFunction(() => window.__hg, null, { timeout: 30000 }).then(() => true, () => false);
+  if (!started) {
+    const text = (await page.evaluate(() => document.body.innerText).catch(() => '')).slice(0, 400);
+    throw new Error(`アプリが起動しなかった: ${text}\n${errors.join('\n')}`);
+  }
   return { page, errors };
 }
 
@@ -461,12 +468,131 @@ async function sheet(page, file, rows) {
   const { page, errors } = await openPage({ width: 1280, height: 720 });
   await page.evaluate(() => window.__hg.loadSamples());
   await page.waitForFunction(() => window.__hg.state.works.length === 6, null, { timeout: 30000 });
-  await page.goto('http://localhost:8941/elsewhere'); // 404 ページ（別ドキュメントなら何でもよい）
-  errors.length = 0;
+  // 別のページへ移動してから戻る（404 ページだと Chrome がエラーを遅れて出すことがあるので data: の空ページにする）
+  await page.goto('data:text/html,<title>elsewhere</title>');
   await page.goBack({ waitUntil: 'networkidle' });
   const vals = await page.evaluate(() => ['#artist', '#subline', '#handle'].map((id) => document.querySelector(id).value));
   check('no form restore shift after back navigation', vals.every((v) => v === ''), JSON.stringify(vals));
   check('no page errors (back navigation)', errors.length === 0, errors.join('\n'));
+  await page.close();
+}
+
+// ---- 7. 作業の保存: 読み込み直しても画像・入力・設定・手直しが戻る。「すべて外す」で保存も消える
+{
+  const { page, errors } = await openPage({ width: 1280, height: 800 });
+  await page.evaluate(() => window.__hg.loadSamples());
+  await page.waitForFunction(() => window.__hg.state.works.length === 6, null, { timeout: 30000 });
+  await page.fill('#artist', 'SAVE TEST');
+  await page.evaluate(() => window.__hg.setAdvOpen(true));
+  await page.fill('#works .work:nth-child(2) input.title', 'Renamed Work');
+  await page.click('#pace button[data-v="tight"]');
+  const before = await page.evaluate(() => {
+    const s = window.__hg.state;
+    const w = s.works[0];
+    w.focal = [{ x: 0.2, y: 0.3, size: 0.2, strength: 1, manual: true }]; // 注目点を手で直した想定
+    s.film = null;
+    return { seed: s.seed, names: s.works.map((x) => x.name) };
+  });
+  await page.fill('#subline', 'SUB'); // 入力で保存が走る
+  await page.waitForTimeout(1200);
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.waitForFunction(() => window.__hg.state.works.length === 6, null, { timeout: 60000 });
+  const after = await page.evaluate(() => {
+    const s = window.__hg.state;
+    return {
+      artist: document.querySelector('#artist').value, subline: document.querySelector('#subline').value,
+      seed: s.seed, pace: s.pace, names: s.works.map((x) => x.name), title: s.works[1].title,
+      focal: s.works[0].focal, autoTitle: s.works[1].autoTitle,
+    };
+  });
+  check('restore: images come back in order', JSON.stringify(after.names) === JSON.stringify(before.names), after.names.join(','));
+  check('restore: text fields', after.artist === 'SAVE TEST' && after.subline === 'SUB', `${after.artist}/${after.subline}`);
+  check('restore: seed and advanced settings', after.seed === before.seed && after.pace === 'tight', `${after.seed} ${after.pace}`);
+  check('restore: edited title and manual focal', after.title === 'Renamed Work' && after.autoTitle !== 'Renamed Work' && after.focal.length === 1 && after.focal[0].manual && Math.abs(after.focal[0].x - 0.2) < 1e-6, JSON.stringify([after.title, after.focal]));
+  // 1 枚外すと、その画像も保存から消える
+  await page.click('#works .work:nth-child(1) .x');
+  await page.waitForTimeout(1200);
+  const imgCount = () => page.evaluate(() => new Promise((res) => {
+    const r = indexedDB.open('hayagawari');
+    r.onsuccess = () => { const q = r.result.transaction('img').objectStore('img').count(); q.onsuccess = () => { res(q.result); r.result.close(); }; };
+  }));
+  check('removing a work deletes its stored image', (await imgCount()) === 5);
+  page.once('dialog', (d) => d.accept());
+  await page.click('#clear-works');
+  await page.waitForTimeout(1200);
+  check('clear all deletes stored images', (await imgCount()) === 0 && await page.evaluate(() => window.__hg.state.works.length === 0 && document.querySelector('#works-bar').hidden));
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.waitForTimeout(1500);
+  check('after clear: nothing restored, fields kept', await page.evaluate(() => window.__hg.state.works.length === 0 && document.querySelector('#artist').value === 'SAVE TEST'));
+  check('no page errors (save/restore)', errors.length === 0, errors.join('\n'));
+  await page.close();
+}
+
+// ---- 8. PR プレビュー（/pr/<N>/）: バッジが出て、保存先が本番と分かれる
+{
+  const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+  page.setDefaultTimeout(120000);
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.goto('http://localhost:8941/pr/42/', { waitUntil: 'networkidle' });
+  const badge = await page.evaluate(() => { const b = document.querySelector('#preview-badge'); return b && { text: b.textContent, href: b.href }; });
+  check('preview badge shown', badge && badge.text.includes('PR #42') && badge.href.endsWith('/pull/42'), JSON.stringify(badge));
+  await page.evaluate(() => window.__hg.loadSamples());
+  await page.waitForFunction(() => window.__hg.state.works.length === 6, null, { timeout: 30000 });
+  await page.evaluate(() => window.__hg.setSound('sfx'));
+  await page.waitForTimeout(1200);
+  const st = await page.evaluate(async () => ({
+    dbs: (await indexedDB.databases()).map((d) => d.name),
+    ls: Object.keys(localStorage),
+  }));
+  check('preview uses separate storage', st.dbs.includes('hayagawari-pr42') && !st.dbs.includes('hayagawari') && st.ls.includes('pr42:hg-sound') && !st.ls.includes('hg-sound'), JSON.stringify(st));
+  // 本番のパスではバッジが出ない
+  await page.goto('http://localhost:8941/', { waitUntil: 'networkidle' });
+  check('no preview badge on production path', await page.evaluate(() => !document.querySelector('#preview-badge') && window.__hg.state.works.length === 0));
+  check('no page errors (preview)', errors.length === 0, errors.join('\n'));
+  await page.close();
+}
+
+// ---- 6. トップ: 作例動画・ロゴ・ボタン
+for (const [name, vp, file] of [['desktop', { width: 1440, height: 900 }, 'hero-16x9'], ['phone', { width: 390, height: 844 }, 'hero-9x16']]) {
+  const { page, errors } = await openPage(vp);
+  const hero = await page.evaluate(() => {
+    const v = document.querySelector('#hero-video');
+    const logo = document.querySelector('#logo');
+    return {
+      src: v.src.split('/').pop(), poster: v.poster.split('/').pop(), muted: v.muted, inline: v.playsInline,
+      h264: v.canPlayType('video/mp4; codecs="avc1.640028"') !== '',
+      logoW: logo.querySelector('.lg.top').getBoundingClientRect().right, viewW: innerWidth,
+      layers: logo.querySelectorAll('.lg i').length,
+    };
+  });
+  check(`hero video picks ${file} (${name})`, hero.src === `${file}.mp4` && hero.poster === `${file}.jpg` && hero.muted && hero.inline, JSON.stringify(hero));
+  check(`logo built and fits (${name})`, hero.layers === 20 && hero.logoW <= hero.viewW, `${hero.logoW.toFixed(0)} <= ${hero.viewW}`);
+  const poster = await page.evaluate((f) => fetch(`assets/hero/${f}.jpg`).then((r) => r.ok && r.headers.get('content-type')), file);
+  check(`hero poster served (${name})`, poster === 'image/jpeg', String(poster));
+  // H.264 を再生できるブラウザ（一般配布の Chrome 等）では実際に動いていること、映像の再生中は止まること
+  if (hero.h264) {
+    await page.waitForFunction(() => document.querySelector('#hero-video').currentTime > 0.5, null, { timeout: 30000 });
+    check(`hero video plays (${name})`, true);
+    await page.click('#hero-sample');
+    await page.waitForFunction(() => window.__hg.state.works.length === 6, null, { timeout: 30000 });
+    await page.click('#go');
+    await page.waitForTimeout(500);
+    check(`hero video pauses during playback (${name})`, await page.evaluate(() => document.querySelector('#hero-video').paused));
+  } else {
+    console.log(`(hero video playback skipped: no H.264 in this browser)`);
+    await page.click('#hero-sample');
+    await page.waitForFunction(() => window.__hg.state.works.length === 6, null, { timeout: 30000 });
+  }
+  if (name === 'desktop') {
+    const pkgVersion = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version;
+    const ver = await page.evaluate(() => ({ kicker: document.querySelector('#ver-kicker').textContent, footer: document.querySelector('#ver').textContent, v: window.__hg.version }));
+    check('version shown on site', ver.v === pkgVersion && ver.kicker === `v${pkgVersion}` && ver.footer.includes(`v${pkgVersion}`) && ver.footer.includes('更新履歴'), JSON.stringify(ver));
+  }
+  check(`hero sample button loads samples (${name})`, await page.evaluate(() => window.__hg.state.works.length === 6));
+  await page.evaluate(() => { document.querySelector('#editor').scrollTop = 0; });
+  await page.screenshot({ path: join(outDir, `hero-${name}.png`) });
+  check(`no page errors (hero ${name})`, errors.length === 0, errors.join('\n'));
   await page.close();
 }
 

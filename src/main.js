@@ -8,6 +8,8 @@ import { randomSeed, createRng } from './rng.js';
 import { initFocalEditor, openFocalEditor } from './focal-editor.js';
 import { pickEncoderConfig, pickAudioConfig, exportFrames } from './export.js';
 import { AudioEngine, buildScore, renderScoreOffline, SOUND_MODES, SOUND_LABELS } from './audio.js';
+import { newKey, putImage, saveSession, loadSession, requestPersist } from './store.js';
+import { VERSION, BUILD, PREVIEW, storageKey } from './version.js';
 
 const $ = (s) => document.querySelector(s);
 const canvas = $('#gl');
@@ -43,6 +45,7 @@ const state = {
   loop: true,
 };
 let nextId = 1;
+const hero = { video: $('#hero-video'), visible: true }; // トップの作例動画
 
 // ---------------------------------------------------------------- URL ハッシュ（シード等の共有）
 
@@ -111,7 +114,7 @@ function setAdvOpen(open) {
   const d = $('#adv');
   if (d.open !== state.advOpen) d.open = state.advOpen;
   body.classList.toggle('adv-open', state.advOpen);
-  try { localStorage.setItem('hg-adv', state.advOpen ? '1' : '0'); } catch { /* 保存できなくても動作に影響なし */ }
+  try { localStorage.setItem(storageKey('hg-adv'), state.advOpen ? '1' : '0'); } catch { /* 保存できなくても動作に影響なし */ }
   state.film = null;
   updateAdvSummary();
   renderWorks();
@@ -172,6 +175,8 @@ function renderWorks() {
   $('#works-hint').hidden = n === 0;
   $('#go').disabled = n === 0;
   $('#go-hint').textContent = n === 0 ? 'まずイラストを追加してください' : `${n} 枚 ・ 約 ${estimateDuration()} 秒`;
+  $('#works-bar').hidden = n === 0;
+  scheduleSave();
 }
 
 function estimateDuration() {
@@ -188,15 +193,21 @@ function removeWork(id) {
   renderWorks();
 }
 
-async function addSources(list) {
+// list: [{ src: File|Blob|Canvas, name, key?, title?, focal? }]。key 等は保存から復元するときだけ渡す
+async function addSources(list, { restoring = false } = {}) {
   body.classList.add('busy');
   try {
-    for (const { src, name } of list) {
+    for (const item of list) {
+      const { src, name } = item;
       try {
         const w = await analyzeImage(src, name);
         w.id = nextId++;
         w.autoTitle = w.title;
+        w.key = item.key || newKey();
+        if (item.title) w.title = item.title;
+        if (item.focal && item.focal.length) w.focal = item.focal.map((f) => ({ ...f }));
         state.works.push(w);
+        if (!restoring) storeImage(w.key, src);
       } catch (e) {
         console.warn(e);
         toast(`読み込めませんでした: ${name}`);
@@ -212,7 +223,78 @@ async function addSources(list) {
 function addFiles(files) {
   const imgs = [...files].filter((f) => f.type.startsWith('image/'));
   if (!imgs.length) return;
-  addSources(imgs.map((f) => ({ src: f, name: f.name })));
+  return addSources(imgs.map((f) => ({ src: f, name: f.name })));
+}
+
+// ---------------------------------------------------------------- 作業の保存（IndexedDB・このブラウザ内のみ）
+
+const SAVED_KEYS = ['seed', 'aspect', 'pace', 'style', 'order', 'opener', 'closer'];
+const TEXT_FIELDS = ['artist', 'subline', 'handle'];
+const persist = { ready: false, timer: 0, pending: new Set() };
+
+// 画像は追加したときに 1 回だけ保存（キャンバス＝サンプルは PNG にして保存）
+function storeImage(key, src) {
+  const p = (async () => {
+    const blob = src instanceof Blob ? src : await new Promise((r) => src.toBlob(r, 'image/png'));
+    if (blob) await putImage(key, blob);
+    requestPersist();
+  })().catch((e) => console.warn('保存できませんでした', e)).finally(() => persist.pending.delete(p));
+  persist.pending.add(p);
+}
+
+function scheduleSave() {
+  clearTimeout(persist.timer);
+  persist.timer = setTimeout(saveNow, 400);
+}
+
+async function saveNow() {
+  if (!persist.ready) return; // 復元が終わる前に空の状態で上書きしない
+  await Promise.all([...persist.pending]); // 画像の保存が済んでから一覧を書く
+  const settings = Object.fromEntries(SAVED_KEYS.map((k) => [k, state[k]]));
+  for (const id of TEXT_FIELDS) settings[id] = $('#' + id).value;
+  const works = state.works.map((w) => ({
+    key: w.key, name: w.name, title: w.title,
+    // 手で直した注目点だけ保存（自動のものは読み込み時に解析し直す）
+    focal: JSON.stringify(w.focal) === JSON.stringify(w.autoFocal) ? null : w.focal,
+  }));
+  try { await saveSession({ v: 1, savedAt: Date.now(), settings, works }, () => state.works.map((w) => w.key)); } catch (e) { console.warn('保存できませんでした', e); }
+}
+
+async function restoreSession() {
+  try {
+    const s = await loadSession();
+    if (!s) return;
+    const st = s.settings || {};
+    const h = new URLSearchParams(location.hash.slice(1));
+    for (const id of TEXT_FIELDS) if (typeof st[id] === 'string' && !$('#' + id).value) $('#' + id).value = st[id];
+    // シード・比率・詳細設定は、URL に指定があればそちらを優先（共有された URL の再現）
+    for (const k of SAVED_KEYS) {
+      if (!st[k] || h.get(k)) continue;
+      if (k === 'aspect' && !ASPECTS[st[k]]) continue;
+      state[k] = st[k];
+    }
+    $('#seed').value = state.seed;
+    segSyncs.forEach((f) => f());
+    updateAdvSummary();
+    // 復元待ちの間にユーザーが画像を追加していたら、そちらを優先
+    if (s.works.length && !state.works.length) {
+      await addSources(s.works.map((w) => ({ src: w.blob, name: w.name, key: w.key, title: w.title, focal: w.focal })), { restoring: true });
+      toast(`前回の作業（${state.works.length} 枚）を復元しました`);
+    }
+  } catch (e) {
+    console.warn('保存した作業を読み込めませんでした', e);
+  } finally {
+    persist.ready = true;
+    scheduleSave();
+  }
+}
+
+function clearWorks() {
+  if (!state.works.length || !confirm('追加した画像をすべて外しますか？（このブラウザに保存した画像も消えます）')) return;
+  for (const w of state.works) if (w.tex) renderer.deleteTexture(w.tex);
+  state.works = [];
+  state.film = null;
+  renderWorks();
 }
 
 // ---------------------------------------------------------------- 映像の生成
@@ -247,6 +329,7 @@ function build() {
   $('#i-bpm').textContent = state.film.bpm;
   $('#i-seed').textContent = state.seed;
   writeHash();
+  scheduleSave();
   state.dirty = true;
   return state.film;
 }
@@ -268,7 +351,7 @@ function syncAudio() {
 const SOUND_ICON = { full: '🔊', sfx: '🔉', off: '🔇' };
 function setSound(mode) {
   state.sound = SOUND_MODES.includes(mode) ? mode : 'full';
-  try { localStorage.setItem('hg-sound', state.sound); } catch { /* 保存できなくても動作に影響なし */ }
+  try { localStorage.setItem(storageKey('hg-sound'), state.sound); } catch { /* 保存できなくても動作に影響なし */ }
   const b = $('#snd');
   b.textContent = `${SOUND_ICON[state.sound]} ${SOUND_LABELS[state.sound]}`;
   b.classList.toggle('muted', state.sound === 'off');
@@ -284,6 +367,7 @@ function play(fromStart = true) {
   state.playing = true;
   body.classList.add('playing');
   $('#play').textContent = '❚❚';
+  heroSync();
   syncAudio();
   poke();
 }
@@ -298,6 +382,7 @@ function pause() {
 function toEditor() {
   pause();
   body.classList.remove('playing');
+  heroSync();
   if (document.fullscreenElement) document.exitFullscreen();
 }
 
@@ -591,7 +676,7 @@ function jump(dir) {
 const hashAdv = readHash();
 {
   let snd = 'full';
-  try { snd = localStorage.getItem('hg-sound') || 'full'; } catch { /* プライベートモード等 */ }
+  try { snd = localStorage.getItem(storageKey('hg-sound')) || 'full'; } catch { /* プライベートモード等 */ }
   state.sound = SOUND_MODES.includes(snd) ? snd : 'full';
 }
 $('#seed').value = state.seed;
@@ -610,10 +695,98 @@ $('#seed').addEventListener('input', (e) => { state.seed = e.target.value.trim()
 $('#dice').addEventListener('click', () => { state.seed = randomSeed(); $('#seed').value = state.seed; state.film = null; });
 
 $('#pick').addEventListener('click', () => $('#file').click());
-$('#file').addEventListener('change', (e) => { addFiles(e.target.files); e.target.value = ''; });
+let scrollToDrop = false; // トップのボタンから読み込んだら、読み込み後に作品一覧まで送る
+$('#file').addEventListener('change', async (e) => {
+  const files = e.target.files;
+  const fromHero = scrollToDrop;
+  scrollToDrop = false;
+  await addFiles(files);
+  e.target.value = '';
+  if (fromHero) $('#drop').scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
 $('#sample').addEventListener('click', () => {
   addSources(makeSamples('samples').map((s) => ({ src: s.canvas, name: s.name })));
 });
+
+// ---------------------------------------------------------------- トップの作例動画
+
+function heroSync() {
+  const v = hero.video;
+  if (!v.src) return;
+  const on = hero.visible && !state.playing && !body.classList.contains('playing') && !document.hidden;
+  if (on && v.paused) v.play().catch(() => { /* 省電力モード等で自動再生できないときはポスター画像のまま */ });
+  else if (!on && !v.paused) v.pause();
+}
+function setupHero() {
+  const v = hero.video;
+  // 縦長の画面には縦動画。回転しても差し替えない（読み込み直しになるため）
+  const base = `assets/hero/hero-${matchMedia('(max-aspect-ratio: 1/1)').matches ? '9x16' : '16x9'}`;
+  v.poster = base + '.jpg';
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return; // 動きを減らす設定ならポスターのみ
+  v.src = base + '.mp4';
+  // 画面外・再生中・タブ非表示のときは止めて電池と GPU を節約
+  new IntersectionObserver(([e]) => { hero.visible = e.isIntersecting; heroSync(); }).observe($('#hero'));
+  document.addEventListener('visibilitychange', heroSync);
+  heroSync();
+}
+$('#hero-pick').addEventListener('click', () => { scrollToDrop = true; $('#file').click(); });
+$('#hero-sample').addEventListener('click', async () => {
+  await addSources(makeSamples('samples').map((s) => ({ src: s.canvas, name: s.name })));
+  $('#drop').scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
+setupHero();
+
+// 入力欄・切り替えボタンの変更を保存（作品の追加・削除・並べ替えは renderWorks から）
+$('#editor').addEventListener('input', scheduleSave);
+$('#editor').addEventListener('click', (e) => { if (e.target.closest('button')) scheduleSave(); });
+$('#clear-works').addEventListener('click', clearWorks);
+window.addEventListener('pagehide', saveNow);
+
+// ロゴ: 上下 2 枚に切った文字を重ね、1 字ずつ組み上げる。その後はときどき一瞬ずれる
+function setupLogo() {
+  const logo = $('#logo');
+  const letters = () => [...'HAYAGAWARI'].map((c, k) => `<i class="${k >= 4 ? 'b' : ''}" style="--k:${k}">${c}</i>`).join('');
+  logo.insertAdjacentHTML('beforeend', `<span class="lg top" aria-hidden="true">${letters()}</span><span class="lg bot" aria-hidden="true">${letters()}</span>`);
+  logo.classList.add('built', 'intro');
+  // 書体の横幅は端末で変わるので、実際の幅を測って欄の幅にぴったり合わせる（最大 150px）
+  const fit = () => {
+    logo.style.fontSize = '100px';
+    const w = logo.querySelector('.lg.top').getBoundingClientRect().width;
+    const avail = logo.parentElement.clientWidth - parseFloat(getComputedStyle(logo.parentElement).paddingLeft) * 2;
+    logo.style.fontSize = Math.max(40, Math.min(150, (100 * avail * 0.97) / w)) + 'px';
+  };
+  fit();
+  document.fonts.ready.then(fit);
+  window.addEventListener('resize', fit);
+  setTimeout(() => logo.classList.remove('intro'), 1600); // 残すと blip の後に登場アニメが再生されてしまう
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  setInterval(() => {
+    if (!hero.visible || document.hidden || state.playing) return;
+    logo.classList.remove('blip');
+    void logo.offsetWidth; // アニメーションを最初からやり直す
+    logo.classList.add('blip');
+  }, 5200);
+}
+setupLogo();
+
+// バージョン表記（コミットと日付はデプロイ時に CI が書き込む）
+{
+  const REPO = 'https://github.com/shironagasu-ai/hayagawari';
+  $('#ver-kicker').textContent = `v${VERSION}`;
+  const build = BUILD.commit === 'dev' ? '開発版' : `<a href="${REPO}/commit/${BUILD.commit}" target="_blank" rel="noopener">${BUILD.commit}</a> ・ ${BUILD.date}`;
+  $('#ver').innerHTML = `HAYAGAWARI v${VERSION} ・ ${build} ・ <a href="${REPO}/releases" target="_blank" rel="noopener">更新履歴</a> ・ <a href="${REPO}" target="_blank" rel="noopener">GitHub</a>`;
+  // PR のプレビューでは、本番と見分けられるよう常に表示する
+  if (PREVIEW) {
+    const a = document.createElement('a');
+    a.id = 'preview-badge';
+    a.href = `${REPO}/pull/${PREVIEW}`;
+    a.target = '_blank';
+    a.rel = 'noopener';
+    a.textContent = `PREVIEW ・ PR #${PREVIEW}${BUILD.commit === 'dev' ? '' : ` ・ ${BUILD.commit}`}`;
+    body.appendChild(a);
+    $('#ver').insertAdjacentHTML('afterbegin', `<b>PR #${PREVIEW} のプレビュー（保存した作業は本番と別）</b> ・ `);
+  }
+}
 const drop = $('#drop');
 window.addEventListener('dragover', (e) => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); drop.classList.add('over'); } });
 window.addEventListener('dragleave', (e) => { if (!e.relatedTarget) drop.classList.remove('over'); });
@@ -681,20 +854,23 @@ resize();
 {
   let open = false;
   try {
-    const v = localStorage.getItem('hg-adv');
-    open = v !== null ? v === '1' : localStorage.getItem('hg-mode') === 'pro'; // 旧「こだわり」設定からの引き継ぎ
+    const v = localStorage.getItem(storageKey('hg-adv'));
+    open = v !== null ? v === '1' : localStorage.getItem(storageKey('hg-mode')) === 'pro'; // 旧「こだわり」設定からの引き継ぎ
   } catch { /* プライベートモード等 */ }
   if (hashAdv) open = true; // 詳細設定つきで共有された URL は、その設定で再現する
   setAdvOpen(open);
   updateAdvSummary();
 }
+restoreSession();
 
 // テスト・デバッグ用フック
 window.__hg = {
+  version: VERSION, build: BUILD,
   state, renderer, tf,
   build, play, pause, reroll, toEditor, setAdvOpen, openExport, xp, audio, setSound,
   loadSamples: () => addSources(makeSamples('samples').map((s) => ({ src: s.canvas, name: s.name }))),
   renderAt: (t) => { state.film.render(renderer, t); state.t = t; },
+  resize, // resize(scale): 仮想解像度 × scale で描く（tools/make-hero.mjs 用）
   // GPU に溜まった描画命令を最後まで実行させる（1px 読み出しで同期。gl.finish は Chrome では待たない）
   sync: () => { const gl = renderer.gl; const px = new Uint8Array(4); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); return px[3]; },
   setSeed: (s) => { state.seed = s; $('#seed').value = s; state.film = null; },
