@@ -88,8 +88,11 @@
 
   #works { margin-top: 24px; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px; }
   .work { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; position: relative; }
-  .work.dragging { opacity: 0.4; }
-  .work.dropbefore { box-shadow: -4px 0 0 var(--accent); }
+  .work { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  .work input.title { -webkit-user-select: text; user-select: text; }
+  .work.sort-hole { opacity: 0.25; border-style: dashed; border-color: var(--accent); }
+  .sort-ghost { position: fixed; left: 0; top: 0; z-index: 60; margin: 0; pointer-events: none; opacity: 0.95; box-shadow: 0 14px 40px rgba(0,0,0,0.55); border-color: var(--accent); }
+  body.sorting, body.sorting * { cursor: grabbing !important; }
   .work .thumb { position: relative; aspect-ratio: 1; background: #000 center/contain no-repeat; cursor: pointer; }
   .work .thumb::after {
     content: "注目点を編集"; position: absolute; left: 50%; bottom: 8px; transform: translateX(-50%);
@@ -139,7 +142,7 @@
   .work input.title:hover { border-bottom-color: var(--sub); }
   .work input.title:focus { outline: none; border-bottom: 1px solid var(--accent); }
   .work .x { position: absolute; top: 6px; right: 6px; width: 24px; height: 24px; border-radius: 50%; border: none; background: rgba(0,0,0,0.65); font-size: 13px; line-height: 24px; }
-  .work .grip { position: absolute; top: 6px; left: 6px; font-size: 11px; padding: 2px 6px; border-radius: 6px; background: rgba(0,0,0,0.65); cursor: grab; font-family: var(--mono); }
+  .work .grip { position: absolute; top: 6px; left: 6px; font-size: 12px; padding: 6px 10px; border-radius: 8px; background: rgba(0,0,0,0.65); cursor: grab; font-family: var(--mono); touch-action: none; z-index: 1; }
   .hint { margin-top: 10px; font-size: 12px; color: var(--sub); }
   .works-bar { margin-top: 12px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
   .works-bar[hidden] { display: none; }
@@ -325,7 +328,7 @@
       <span class="hint">作業内容はこのブラウザに自動で保存され、次に開いたときに元に戻ります（外部には送信しません）</span>
       <button class="btn" id="clear-works">すべて外す</button>
     </div>
-    <div class="hint" id="works-hint" hidden>作品名はカードの下で書き換えられます。丸は注目点（番号＝優先順。1番が一番見せたい箇所）で、サムネイルをタップすると編集できます（赤＝自動検出、緑＝手動）。カードのドラッグで並べ替え。作品名と注目点は、詳細設定を閉じていても映像に反映されます。</div>
+    <div class="hint" id="works-hint" hidden>作品名はカードの下で書き換えられます。丸は注目点（番号＝優先順。1番が一番見せたい箇所）で、サムネイルをタップすると編集できます（赤＝自動検出、緑＝手動）。並べ替えはカードをドラッグ（スマホは左上の番号札をドラッグするか、カードを長押し）。作品名と注目点は、詳細設定を閉じていても映像に反映されます。</div>
 
     <div class="grid-form">
       <div class="field">

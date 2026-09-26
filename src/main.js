@@ -136,7 +136,6 @@ function renderWorks() {
   state.works.forEach((w, i) => {
     const el = document.createElement('div');
     el.className = 'work';
-    el.draggable = true;
     el.dataset.id = w.id;
     const pts = w.focal.map((f, k) => `<span class="pt ${k === 0 ? 'p0' : ''} ${f.manual ? 'manual' : ''}" style="left:${f.x * 100}%;top:${f.y * 100}%">${k + 1}</span>`).join('');
     el.innerHTML = `
@@ -152,25 +151,10 @@ function renderWorks() {
     if (a >= 1) { ptbox.style.top = `${(1 - 1 / a) * 50}%`; ptbox.style.bottom = `${(1 - 1 / a) * 50}%`; }
     else { ptbox.style.left = `${(1 - a) * 50}%`; ptbox.style.right = `${(1 - a) * 50}%`; }
     ptbox.innerHTML = pts;
-    thumb.addEventListener('click', () => openFocalEditor(w, () => { state.film = null; renderWorks(); }));
+    thumb.addEventListener('click', () => { if (!sorter.justDropped) openFocalEditor(w, () => { state.film = null; renderWorks(); }); });
     el.querySelector('.x').addEventListener('click', () => removeWork(w.id));
     el.querySelector('input.title').addEventListener('input', (e) => { w.title = e.target.value || 'UNTITLED'; state.film = null; });
-    el.addEventListener('dragstart', (e) => { el.classList.add('dragging'); e.dataTransfer.setData('text/x-work', String(w.id)); e.dataTransfer.effectAllowed = 'move'; });
-    el.addEventListener('dragend', () => el.classList.remove('dragging'));
-    el.addEventListener('dragover', (e) => { if (e.dataTransfer.types.includes('text/x-work')) { e.preventDefault(); el.classList.add('dropbefore'); } });
-    el.addEventListener('dragleave', () => el.classList.remove('dropbefore'));
-    el.addEventListener('drop', (e) => {
-      const id = Number(e.dataTransfer.getData('text/x-work'));
-      el.classList.remove('dropbefore');
-      if (!id) return;
-      e.preventDefault(); e.stopPropagation();
-      const from = state.works.findIndex((x) => x.id === id);
-      const [m] = state.works.splice(from, 1);
-      const to = state.works.findIndex((x) => x.id === w.id);
-      state.works.splice(to, 0, m);
-      state.film = null;
-      renderWorks();
-    });
+    el.addEventListener('pointerdown', (e) => sortDown(e, el));
     box.appendChild(el);
   });
   const n = state.works.length;
@@ -180,6 +164,137 @@ function renderWorks() {
   $('#works-bar').hidden = n === 0;
   scheduleSave();
 }
+
+// ---------------------------------------------------------------- 作品の並べ替え（マウス・タッチ共通）
+// マウス: カードのどこを掴んでも、少し動かすと並べ替えになる（動かさずに離せばクリック）。
+// タッチ: 左上の番号札はすぐ、カードのほかの場所は長押し（0.3 秒）で掴む。すぐ動かしたときはスクロール。
+// 掴んだカードは指について動き、ほかのカードはその場で詰めて動く。隙間や最後尾にも落とせる。
+const sorter = { el: null, ghost: null, pointerId: 0, x0: 0, y0: 0, dx: 0, dy: 0, x: 0, y: 0, timer: 0, armed: false, active: false, justDropped: false, raf: 0 };
+const SORT_MOVE = 6; // マウスでこれだけ動かしたら並べ替え開始（px）
+const SORT_HOLD = 300; // タッチの長押し（ms）
+
+function sortDown(e, el) {
+  if (sorter.el || (e.pointerType === 'mouse' && e.button !== 0)) return;
+  if (e.target.closest('input, button')) return;
+  Object.assign(sorter, { el, pointerId: e.pointerId, x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY, armed: false, active: false });
+  const fromGrip = !!e.target.closest('.grip');
+  if (e.pointerType === 'mouse' || fromGrip) sorter.armed = true; // 動かせばすぐ始まる
+  else sorter.timer = setTimeout(() => { sorter.armed = true; sortStart(); }, SORT_HOLD);
+  if (fromGrip) e.preventDefault();
+  window.addEventListener('pointermove', sortMove, { passive: false });
+  window.addEventListener('pointerup', sortUp);
+  window.addEventListener('pointercancel', sortCancel);
+}
+
+function sortMove(e) {
+  if (e.pointerId !== sorter.pointerId) return;
+  sorter.x = e.clientX; sorter.y = e.clientY;
+  const moved = Math.hypot(sorter.x - sorter.x0, sorter.y - sorter.y0);
+  if (!sorter.active) {
+    if (sorter.armed && moved > SORT_MOVE) sortStart();
+    else if (!sorter.armed && moved > 10) sortEnd(false); // 長押しの前に動いた＝スクロール
+    return;
+  }
+  e.preventDefault();
+  sortFollow();
+}
+
+function sortStart() {
+  const { el } = sorter;
+  if (!el || sorter.active) return;
+  clearTimeout(sorter.timer);
+  sorter.active = true;
+  const r = el.getBoundingClientRect();
+  sorter.dx = sorter.x0 - r.left; sorter.dy = sorter.y0 - r.top;
+  const g = el.cloneNode(true);
+  g.classList.add('sort-ghost');
+  g.querySelector('input.title').value = el.querySelector('input.title').value; // 入力欄の中身は複製されない
+  g.style.width = `${r.width}px`; g.style.height = `${r.height}px`;
+  document.body.appendChild(g);
+  sorter.ghost = g;
+  el.classList.add('sort-hole');
+  body.classList.add('sorting');
+  if (navigator.vibrate) navigator.vibrate(10);
+  sortFollow();
+  const scroll = () => { // 画面の上下の端に近づいたら編集画面をスクロール
+    const ed = $('#editor'), edge = 70, h = window.innerHeight;
+    const v = sorter.y < edge ? -(edge - sorter.y) : sorter.y > h - edge ? sorter.y - (h - edge) : 0;
+    if (v) { ed.scrollTop += v * 0.25; sortPlace(); }
+    sorter.raf = requestAnimationFrame(scroll);
+  };
+  sorter.raf = requestAnimationFrame(scroll);
+}
+
+function sortFollow() {
+  sorter.ghost.style.transform = `translate(${sorter.x - sorter.dx}px, ${sorter.y - sorter.dy}px) rotate(-2deg) scale(1.04)`;
+  sortPlace();
+}
+
+// 詰めて動く途中（transform 中）でも、動き終わったあとの位置で判定する
+function layoutRect(c) {
+  const r = c.getBoundingClientRect();
+  const m = new DOMMatrixReadOnly(getComputedStyle(c).transform === 'none' ? undefined : getComputedStyle(c).transform);
+  return { left: r.left - m.e, top: r.top - m.f, width: r.width, height: r.height };
+}
+
+// 指の位置にいちばん近いカードの前か後ろへ、掴んだカードの場所（穴）を動かす
+function sortPlace() {
+  const box = $('#works'), hole = sorter.el;
+  const cards = [...box.children].filter((c) => c !== hole);
+  if (!cards.length) return;
+  let best = null, bd = Infinity;
+  for (const c of cards) {
+    const r = layoutRect(c);
+    const d = Math.hypot(sorter.x - (r.left + r.width / 2), sorter.y - (r.top + r.height / 2));
+    if (d < bd) { bd = d; best = c; }
+  }
+  const r = layoutRect(best);
+  const after = sorter.x > r.left + r.width / 2;
+  const ref = after ? best.nextSibling : best;
+  if (ref === hole || (after ? best.nextSibling === hole : best.previousSibling === hole)) return;
+  // 動く前の位置を覚えておき、詰めて動く様子をなめらかに見せる
+  const before = new Map([...box.children].map((c) => [c, c.getBoundingClientRect()]));
+  box.insertBefore(hole, ref);
+  for (const c of box.children) {
+    const a = before.get(c), b = layoutRect(c);
+    if (!a || (a.left === b.left && a.top === b.top)) continue;
+    c.style.transition = 'none';
+    c.style.transform = `translate(${a.left - b.left}px, ${a.top - b.top}px)`;
+    requestAnimationFrame(() => { c.style.transition = 'transform 0.18s ease-out'; c.style.transform = ''; });
+  }
+}
+
+function sortUp(e) { if (e.pointerId === sorter.pointerId) sortEnd(true); }
+function sortCancel(e) { if (e.pointerId === sorter.pointerId) sortEnd(true); }
+
+function sortEnd(commit) {
+  clearTimeout(sorter.timer);
+  cancelAnimationFrame(sorter.raf);
+  window.removeEventListener('pointermove', sortMove);
+  window.removeEventListener('pointerup', sortUp);
+  window.removeEventListener('pointercancel', sortCancel);
+  const wasActive = sorter.active;
+  if (sorter.ghost) sorter.ghost.remove();
+  if (sorter.el) sorter.el.classList.remove('sort-hole');
+  body.classList.remove('sorting');
+  Object.assign(sorter, { el: null, ghost: null, active: false, armed: false });
+  if (!wasActive) return;
+  // 並べ替えた直後のクリックで注目点エディタが開かないように
+  sorter.justDropped = true;
+  setTimeout(() => { sorter.justDropped = false; }, 0);
+  if (!commit) return;
+  const order = [...$('#works').children].map((c) => Number(c.dataset.id));
+  const same = order.every((id, i) => state.works[i] && state.works[i].id === id);
+  if (!same) {
+    const byId = new Map(state.works.map((w) => [w.id, w]));
+    state.works = order.map((id) => byId.get(id)).filter(Boolean);
+    state.film = null;
+  }
+  renderWorks();
+}
+// 掴んでいる間はタッチでページがスクロールしないように（iOS は touchmove を止める必要がある）
+document.addEventListener('touchmove', (e) => { if (sorter.active && e.cancelable) e.preventDefault(); }, { passive: false });
+document.addEventListener('contextmenu', (e) => { if (sorter.el && sorter.armed) e.preventDefault(); }); // 長押しのメニューを出さない
 
 function estimateDuration() {
   const beats = { tight: 6, normal: 8, relaxed: 10 }[effectiveSettings().pace];
