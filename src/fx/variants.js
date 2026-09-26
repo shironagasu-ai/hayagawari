@@ -2,12 +2,12 @@
 
 import { createRng } from '../rng.js';
 import {
-  pad2, TAU, lum, withA, pointsFor, camLerp, clampFull, closeHq, drawCam, coverUV, panelZoom,
+  pad2, TAU, lum, mix, withA, pointsFor, camLerp, clampFull, closeHq, drawCam, coverUV, panelZoom,
   drawText, textH, textW, layoutFor, makeTextBlock,
 } from '../kit.js';
 import { circleP } from './bookend-kit.js';
 import {
-  clamp, lerp, prog, quadOut, expoIn, expoOut, expoInOut,
+  clamp, lerp, prog, smooth, quadOut, expoIn, expoOut, expoInOut,
   backOut, snap, snapSoft, antic,
 } from '../ease.js';
 
@@ -436,6 +436,304 @@ export const VARIANTS = {
       text(r, t, tText, col);
     };
   },
+  // 拍ごとに注目点へ段階的に踏み込み（パンチイン）、最後に一気に引いて全体
+  punch(S) {
+    const { work, W, H, beat, D, layout, rng, points } = S;
+    const f = points[0];
+    const img = layout.img;
+    const fit = { ix: 0.5, iy: 0.5, sx: img.x, sy: img.y, hq: img.h };
+    const close = clampFull(work, { ix: f.x, iy: f.y, sx: W / 2, sy: H / 2, hq: closeHq(work, f, W, H, rng.range(0.95, 1.2)) }, W, H);
+    const hits = [beat * 0.75, beat * 1.5, beat * 2.25].filter((x) => x < D - 1.8);
+    const levels = [0.45, 0.75, 1];
+    const tOut = Math.min(D - 1.4, beat * 3);
+    hits.forEach((h) => { S.event(h, 'flash', 0.18, 0.1); S.event(h, 'shake', 3, 0.12); });
+    S.event(tOut, 'aberr', 4, 0.3);
+    const text = makeTextBlock(S);
+    const cam = (t) => {
+      let lv = 0;
+      hits.forEach((h, k) => { lv = lerp(lv, levels[k], snap(prog(t, h - 0.12, h))); });
+      lv *= 1 - expoOut(prog(t, tOut, tOut + 0.55));
+      const c = camLerp(fit, close, lv);
+      c.hq *= 1 + 0.03 * (t / D);
+      return c;
+    };
+    return (r, t, col, hint) => {
+      const c = cam(t), prev = cam(t - 1 / 60);
+      drawCam(r, work, c, prev, { shutter: 0.8 });
+      const sp = Math.abs(Math.log(c.hq / prev.hq)) * 60;
+      hint.radial = clamp(sp * 0.02, 0, 0.35);
+      hint.cx = c.sx / W; hint.cy = 1 - c.sy / H;
+      text(r, t, tOut + 0.35, col);
+    };
+  },
+
+  // 沈んだ絵をスキャンの光が上から下へなぞり、なぞった所から色が戻る
+  scan(S) {
+    const { work, W, H, beat, D, layout, points, minDim, tf } = S;
+    const img = layout.img;
+    const tScan = Math.min(D - 1.8, beat * 2.2);
+    const marks = points.slice(0, 3).map((p, i) => ({
+      p, L: tf.get(`${pad2(i + 1)}`, { family: 'mono', size: Math.round(minDim * 0.016), weight: 700, tracking: 0.1 }),
+    }));
+    S.event(0.1, 'aberr', 2, 0.2);
+    S.event(tScan, 'flash', 0.2, 0.12);
+    const text = makeTextBlock(S);
+    const th = Math.max(2, minDim * 0.004);
+    return (r, t, col) => {
+      const s = 1 + 0.02 * (t / D);
+      const w = img.w * s, h = img.h * s;
+      const ein = expoOut(prog(t, 0, 0.3));
+      const p = smooth(prog(t, 0.25, tScan));
+      r.draw({ x: img.x, y: img.y, w, h, tex: work.tex, tint: [col.bg[0], col.bg[1], col.bg[2], 0.78], alpha: ein });
+      if (p > 0) r.draw({ x: img.x, y: img.y, w, h, tex: work.tex, mask: { type: 'wipe', p, angle: Math.PI / 2, soft: 6 } });
+      if (p > 0 && p < 1) {
+        const y = img.y - h / 2 + h * p;
+        r.draw({ x: img.x, y, w: w * 1.04, h: minDim * 0.04, color: withA(col.accent, 0.25) });
+        r.draw({ x: img.x, y, w: w * 1.04, h: th, color: col.accent });
+      }
+      // なぞった注目点に印
+      for (const M of marks) {
+        const lt = t - (0.25 + (tScan - 0.25) * M.p.y);
+        if (lt < 0 || p <= 0) continue;
+        const e = backOut(prog(lt, 0, 0.3), 1.8) * (1 - expoOut(prog(t, tScan + 0.4, tScan + 0.8)));
+        if (e <= 0) continue;
+        const cx = img.x + (M.p.x - 0.5) * w, cy = img.y + (M.p.y - 0.5) * h;
+        const R = minDim * 0.03 * e;
+        r.draw({ x: cx, y: cy, w: R * 2, h: R * 2, mode: 'ring', pat: [0, th, 0, 0], color: col.accent });
+        drawText(r, M.L, cx + R + minDim * 0.008, cy - R, { color: col.accent, alpha: e });
+      }
+      text(r, t, tScan + 0.3, col);
+    };
+  },
+
+  // 上から吊られて落ちてきた絵が、振り子のように揺れて止まる
+  swing(S) {
+    const { work, W, H, beat, D, layout, rng, minDim } = S;
+    const img = { ...layout.img, w: layout.img.w * 0.9, h: layout.img.h * 0.9 };
+    const b = minDim * 0.01;
+    const hang = minDim * 0.05; // 留め具から絵の上端まで
+    const pivot = { x: img.x, y: img.y - img.h / 2 - hang };
+    const a0 = rng.sign() * rng.range(0.35, 0.5);
+    const om = (Math.PI * 2) / (beat * 1.1);
+    const tLand = 0.45;
+    S.event(tLand, 'shake', 4, 0.18);
+    const text = makeTextBlock(S);
+    const ang = (t) => (t < tLand ? a0 : a0 * Math.exp(-(t - tLand) * 1.7) * Math.cos((t - tLand) * om));
+    return (r, t, col) => {
+      const drop = -H * (1 - expoOut(prog(t, 0, tLand)));
+      const a = ang(t);
+      const px = pivot.x, py = pivot.y + drop;
+      const dist = hang + img.h / 2;
+      const cx = px - Math.sin(a) * dist, cy = py + Math.cos(a) * dist;
+      // 吊りひも（留め具から絵の上端の両角へ）
+      for (const sx of [-1, 1]) {
+        const ex = cx + Math.cos(a) * sx * img.w * 0.3 + Math.sin(a) * img.h / 2;
+        const ey = cy + Math.sin(a) * sx * img.w * 0.3 - Math.cos(a) * img.h / 2;
+        const vx = ex - px, vy = ey - py, L = Math.hypot(vx, vy);
+        r.draw({ x: (px + ex) / 2, y: (py + ey) / 2, w: L, h: Math.max(1.5, minDim * 0.003), rot: Math.atan2(vy, vx), color: withA(col.ink, 0.6) });
+      }
+      r.draw({ x: cx + b, y: cy + b * 1.6, w: img.w + b * 2, h: img.h + b * 2, rot: a, color: withA([0, 0, 0], 0.25) });
+      r.draw({ x: cx, y: cy, w: img.w + b * 2, h: img.h + b * 2, rot: a, color: col.ink });
+      r.draw({ x: cx, y: cy, w: img.w, h: img.h, rot: a, tex: work.tex });
+      r.draw({ x: px, y: py, w: minDim * 0.022, h: minDim * 0.022, mode: 'disc', color: col.accent });
+      text(r, t, beat * 2.2, col);
+    };
+  },
+
+  // 奥から回転しながら加速して飛び込み、行き過ぎてから着地
+  dive(S) {
+    const { work, W, H, beat, D, layout, rng } = S;
+    const img = layout.img;
+    const tLand = Math.min(D - 1.6, beat * 1.5);
+    const rot0 = rng.sign() * rng.range(0.4, 0.7);
+    S.event(tLand, 'shake', 7, 0.25);
+    S.event(tLand, 'aberr', 5, 0.3);
+    const text = makeTextBlock(S);
+    const pose = (t) => {
+      const e = expoIn(prog(t, 0, tLand));
+      const settle = expoOut(prog(t, tLand, tLand + 0.4));
+      const s = t < tLand ? lerp(0.12, 1.22, e) : lerp(1.22, 1, settle) * (1 + 0.02 * prog(t, tLand + 0.4, D));
+      return { s, rot: rot0 * (1 - e), a: clamp(t / 0.15) };
+    };
+    return (r, t, col, hint) => {
+      const P = pose(t), Q = pose(t - 1 / 60);
+      // 残像（突っ込み中だけ）
+      if (t < tLand) {
+        for (let k = 2; k >= 1; k--) {
+          const E = pose(t - k * 0.04);
+          r.draw({ x: img.x, y: img.y, w: img.w * E.s, h: img.h * E.s, rot: E.rot, tex: work.tex, alpha: 0.25 * P.a });
+        }
+      }
+      r.draw({ x: img.x, y: img.y, w: img.w * P.s, h: img.h * P.s, rot: P.rot, tex: work.tex, alpha: P.a });
+      hint.radial = clamp(Math.abs(Math.log(P.s / Q.s)) * 60 * 0.03, 0, 0.4);
+      hint.cx = img.x / W; hint.cy = 1 - img.y / H;
+      text(r, t, tLand + 0.35, col);
+    };
+  },
+
+  // 網点のツートンで見せてから、注目点から本来の色が広がる
+  duotone(S) {
+    const { work, W, H, beat, D, layout, points, minDim } = S;
+    const img = layout.img;
+    const f = points[0];
+    const tC = Math.min(D - 1.4, beat * 2.5);
+    const per = Math.max(6, minDim * 0.018);
+    S.event(tC, 'flash', 0.25, 0.14);
+    S.event(tC, 'aberr', 3, 0.3);
+    const text = makeTextBlock(S);
+    return (r, t, col) => {
+      const s = 1 + 0.05 * (1 - expoOut(prog(t, 0, 0.8))) + 0.02 * prog(t, 0.8, D);
+      const w = img.w * s, h = img.h * s;
+      const ein = expoOut(prog(t, 0, 0.35));
+      const ec = expoOut(prog(t, tC, tC + 0.5));
+      if (ec < 1) {
+        r.draw({ x: img.x, y: img.y, w, h, tex: work.tex, tint: [col.accent[0], col.accent[1], col.accent[2], 0.6], alpha: ein });
+        r.draw({ x: img.x, y: img.y, w, h, mode: 'dots', pat: [per, 0.55, Math.PI / 4, per * 0.4 * t], color: withA(col.bg, 0.55 * ein) });
+      }
+      if (ec > 0) {
+        const R = circleP(w, h, f.x, f.y, Math.hypot(w, h) * ec);
+        r.draw({ x: img.x, y: img.y, w, h, tex: work.tex, mask: { type: 'circle', p: R, cx: f.x, cy: f.y, soft: 3 } });
+      }
+      text(r, t, tC + 0.3, col);
+    };
+  },
+
+  // 4 つの寄りが田の字に並び、中身がすべり合って 1 枚の絵に組み上がる
+  quad(S) {
+    const { work, W, H, beat, D, layout, points, minDim } = S;
+    const img = layout.img;
+    const cw = img.w / 2, ch = img.h / 2;
+    const gap0 = minDim * 0.025;
+    const crops = [points[0], points[1], points[2], { x: 0.5, y: 0.5, size: 0.9 }];
+    const cells = [0, 1, 2, 3].map((k) => {
+      const i = k % 2, j = Math.floor(k / 2);
+      const p = crops[k];
+      return {
+        i, j, t0: 0.05 + k * beat * 0.35,
+        from: coverUV(work, cw, ch, p.x, p.y, panelZoom(work, p, cw, ch, 0.9)),
+        to: [i / 2, j / 2, (i + 1) / 2, (j + 1) / 2],
+      };
+    });
+    const tJoin = Math.min(D - 1.4, beat * 2.5);
+    cells.forEach((c) => S.event(c.t0 + 0.15, 'shake', 1.5, 0.1));
+    S.event(tJoin, 'shake', 5, 0.2);
+    const text = makeTextBlock(S);
+    return (r, t, col) => {
+      const ej = snap(prog(t, tJoin - 0.3, tJoin + 0.15));
+      const gap = gap0 * (1 - ej);
+      const drift = 1 + 0.025 * prog(t, tJoin + 0.2, D);
+      for (const c of cells) {
+        const e = backOut(prog(t, c.t0, c.t0 + 0.35), 1.5);
+        if (e <= 0) continue;
+        const uv = c.from.map((v, k) => lerp(v, c.to[k], ej));
+        const x = img.x + ((c.i - 0.5) * cw + (c.i - 0.5) * gap) * drift;
+        const y = img.y + ((c.j - 0.5) * ch + (c.j - 0.5) * gap) * drift;
+        if (ej < 1) r.draw({ x, y, w: (cw + gap0 * 0.6) * e * drift, h: (ch + gap0 * 0.6) * e * drift, color: withA(col.accent, 1 - ej) });
+        r.draw({ x, y, w: (cw + 0.6) * e * drift, h: (ch + 0.6) * e * drift, tex: work.tex, uv });
+      }
+      text(r, t, tJoin + 0.25, col);
+    };
+  },
+
+  // 大きく浮いた絵が一気に叩きつけられ、衝撃波が広がる
+  slam(S) {
+    const { work, W, H, beat, D, layout, rng, minDim } = S;
+    const img = layout.img;
+    const tHit = Math.min(D - 1.8, beat * 0.75);
+    const rot0 = rng.sign() * rng.range(0.05, 0.12);
+    S.event(tHit, 'shake', 10, 0.3);
+    S.event(tHit, 'flash', 0.35, 0.12);
+    S.event(tHit, 'aberr', 5, 0.3);
+    const text = makeTextBlock(S);
+    return (r, t, col) => {
+      const e = expoIn(prog(t, 0, tHit));
+      const lt = t - tHit;
+      const s = t < tHit ? lerp(1.9, 1, e) : 1 - 0.03 * Math.exp(-lt * 12) * Math.sin(lt * 50) + 0.02 * prog(t, tHit + 0.5, D);
+      const rot = t < tHit ? rot0 * (1 - e) : 0;
+      // 衝撃波（絵の縁から広がって消える）
+      if (lt > 0) {
+        for (let k = 0; k < 2; k++) {
+          const q = expoOut(prog(lt, k * 0.08, k * 0.08 + 0.6));
+          if (q <= 0 || q >= 1) continue;
+          const g = 1 + 0.35 * q;
+          r.draw({ x: img.x, y: img.y, w: img.w * g, h: img.h * g, color: withA(k ? col.ink : col.accent, 0.5 * (1 - q)) });
+        }
+      }
+      r.draw({ x: img.x, y: img.y, w: img.w * s, h: img.h * s, rot, tex: work.tex, alpha: clamp(t / Math.max(0.05, tHit * 0.5)) });
+      text(r, t, tHit + 0.35, col);
+    };
+  },
+
+  // 映画のように上下を黒帯で切り、横長の画角でゆっくりパン。帯が開くと全体
+  cinema(S) {
+    const { work, W, H, beat, D, layout, points, minDim, tf, idx } = S;
+    const img = layout.img;
+    const ratio = W > H ? 2.39 : 1;
+    const barH = Math.max(0, (H - W / ratio) / 2);
+    const p0 = points[0], p1 = points[1];
+    const hq = closeHq(work, p0, W, H, 0.7);
+    const tOpen = Math.min(D - 1.3, beat * 4);
+    const SC = tf.get(`SCENE ${pad2(idx + 1)}`, { family: 'mono', size: Math.round(minDim * 0.016), weight: 700, tracking: 0.3 });
+    const fit = { ix: 0.5, iy: 0.5, sx: img.x, sy: img.y, hq: img.h };
+    S.event(tOpen, 'aberr', 3, 0.3);
+    const text = makeTextBlock(S);
+    const pan = (t) => {
+      const e = smooth(prog(t, 0, tOpen));
+      return clampFull(work, { ix: lerp(p0.x, p1.x, e), iy: lerp(p0.y, p1.y, e), sx: W / 2, sy: H / 2, hq: hq * (1 + 0.05 * e) }, W, H);
+    };
+    const cam = (t) => camLerp(pan(Math.min(t, tOpen)), fit, expoOut(prog(t, tOpen, tOpen + 0.6)));
+    const black = [0.02, 0.02, 0.03];
+    return (r, t, col) => {
+      drawCam(r, work, cam(t), cam(t - 1 / 60), { shutter: 0.5 });
+      const eb = expoOut(prog(t, 0, 0.4)) * (1 - snap(prog(t, tOpen - 0.1, tOpen + 0.35)));
+      if (eb > 0 && barH > 0) {
+        const h = barH * eb;
+        r.draw({ x: W / 2, y: h / 2, w: W, h, color: black });
+        r.draw({ x: W / 2, y: H - h / 2, w: W, h, color: black });
+        drawText(r, SC, minDim * 0.05, H - h + (h - textH(SC)) / 2, { color: withA([0.9, 0.9, 0.9], 0.8), alpha: eb, reveal: expoOut(prog(t, 0.3, 0.8)) });
+      }
+      text(r, t, tOpen + 0.35, col);
+    };
+  },
+
+  // 粗いモザイクから拍ごとに細かくなり、くっきりした絵になる
+  pixel(S) {
+    const { work, W, H, beat, D, layout } = S;
+    const img = layout.img;
+    const a = work.aspect;
+    const grid = (n) => ({ cols: n, rows: Math.max(1, Math.round(n / a)) });
+    // 1 コマの描画命令を抑えるため、最も細かい段でもマス目は 400 以内
+    const nMax = Math.max(8, Math.floor(Math.sqrt(400 * a)));
+    const steps = [grid(Math.max(3, Math.round(nMax / 5))), grid(Math.round(nMax / 2.5)), grid(nMax)];
+    const tS = Math.min(D - 1.4, beat * 2.4);
+    const ts = [0, tS * 0.34, tS * 0.67];
+    ts.forEach((x, i) => { if (i) S.event(x, 'aberr', 2, 0.15); });
+    S.event(tS, 'flash', 0.25, 0.12);
+    const text = makeTextBlock(S);
+    return (r, t, col) => {
+      const s = 1 + 0.02 * (t / D);
+      const w = img.w * s, h = img.h * s;
+      if (t >= tS) {
+        r.draw({ x: img.x, y: img.y, w, h, tex: work.tex });
+      } else {
+        const k = t < ts[1] ? 0 : t < ts[2] ? 1 : 2;
+        const { cols, rows } = steps[k];
+        const tw = w / cols, th = h / rows;
+        const lod = Math.max(0, Math.log2(work.width / cols));
+        const ein = expoOut(prog(t, 0, 0.3));
+        for (let j = 0; j < rows; j++) {
+          for (let i = 0; i < cols; i++) {
+            r.draw({
+              x: img.x - w / 2 + (i + 0.5) * tw, y: img.y - h / 2 + (j + 0.5) * th, w: tw + 0.6, h: th + 0.6,
+              tex: work.tex, lod, uv: [(i + 0.5) / cols, (j + 0.5) / rows, (i + 0.5) / cols, (j + 0.5) / rows], alpha: ein,
+            });
+          }
+        }
+      }
+      text(r, t, tS + 0.3, col);
+    };
+  },
+
 };
 
 export const VARIANT_KEYS = () => Object.keys(VARIANTS);
