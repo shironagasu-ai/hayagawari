@@ -1,6 +1,6 @@
-# E2E テスト（PR と main へのプッシュ）と、テストが通った main だけを GitHub Pages へ公開する。
-# Pages の公開元は Settings → Pages → Source を「GitHub Actions」にしておくこと。
-name: CI / Pages
+# テスト（PR と main へのプッシュ）。公開・PR のプレビュー・リリースは pages.yml が
+# このワークフローの完了を受けて行う（テストが通った回だけ）。
+name: CI
 
 on:
   pull_request:
@@ -52,31 +52,3 @@ jobs:
           path: tests/output/
           retention-days: 7
           if-no-files-found: ignore
-
-  deploy:
-    name: Deploy to GitHub Pages
-    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    needs: e2e
-    runs-on: ubuntu-24.04
-    permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    concurrency:
-      group: pages
-      cancel-in-progress: false
-    steps:
-      - uses: actions/checkout@v7
-      # 公開するのは実行に必要なファイルだけ（tests / docs / package.json などは含めない）
-      - name: Collect site files
-        run: |
-          mkdir _site
-          cp -r index.html src vendor LICENSE _site/
-      - uses: actions/configure-pages@v6
-      - uses: actions/upload-pages-artifact@v5
-        with:
-          path: _site
-      - id: deployment
-        uses: actions/deploy-pages@v5

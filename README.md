@@ -76,12 +76,19 @@ tests/e2e.mjs    … Playwright による E2E テスト
 
 ## 自動テストと公開（GitHub Actions）
 
-`.github/workflows/ci.yml`
+| ワークフロー | いつ | 何を |
+|---|---|---|
+| `ci.yml`（CI） | PR・main へのプッシュ | E2E テスト（Playwright の Chromium と一般配布の Google Chrome。Chrome では H.264 で書き出せることも確認）。スクリーンショットと書き出した動画は実行結果の Artifacts から 7 日間ダウンロードできる |
+| `pages.yml`（Pages） | CI が通るたび・PR を閉じたとき | サイト全体を組み立てて GitHub Pages に公開（下記） |
 
-- **PR と main へのプッシュ**で E2E テストを実行。Playwright の Chromium と、一般配布の Google Chrome の 2 種類で並行して回す（Chrome では H.264 で書き出せることも確認）
-- テストのスクリーンショットと書き出した動画は、実行結果の Artifacts から 7 日間ダウンロードできる
-- **main でテストが通ったときだけ** GitHub Pages へ公開（`index.html` / `src` / `vendor` / `LICENSE` のみ）
-- 事前設定: Settings → Pages → Build and deployment → Source を **GitHub Actions** にする
+**公開される場所**
+
+- 本番: https://shironagasu-ai.github.io/hayagawari/ … main で**テストが通った最新のコミット**
+- **PR のプレビュー**: `https://shironagasu-ai.github.io/hayagawari/pr/<PR番号>/` … 開いている PR の最新のコミット。**main にマージする前に実機で確認する用**。URL は PR にコメントされる（プッシュのたびに更新）
+  - 同じリポジトリのブランチからの PR だけ載せる（フォークからの PR は載せない）。PR を閉じると消える。検索エンジンには載せない（noindex）
+  - PR のコードは Pages の組み立て中に実行しない（ファイルを取り出して置くだけ）
+- `tools/build-pages.sh` が組み立てを行う（公開するのは `index.html` / `src` / `vendor` / `assets` / `LICENSE` のみ）
+- 事前設定: Settings → Pages → Build and deployment → Source を **GitHub Actions** にする（設定済み）
 
 ## ローカルで動かす / テスト
 
