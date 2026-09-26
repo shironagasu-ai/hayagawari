@@ -30,8 +30,8 @@ const browser = await chromium.launch({
 const fails = [];
 const check = (name, cond, extra = '') => { console.log(`${cond ? 'PASS' : 'FAIL'}: ${name} ${extra}`); if (!cond) fails.push(name); };
 
-async function openPage(viewport, hash = '') {
-  const page = await browser.newPage({ viewport });
+async function openPage(viewport, hash = '', extra = {}) {
+  const page = await browser.newPage({ viewport, ...extra });
   // CI（GPU なし・ソフトウェア描画）は遅いので操作の待ち時間を長めに
   page.setDefaultTimeout(120000);
   const errors = [];
@@ -552,6 +552,47 @@ async function sheet(page, file, rows) {
   await page.goto('http://localhost:8941/', { waitUntil: 'networkidle' });
   check('no preview badge on production path', await page.evaluate(() => !document.querySelector('#preview-badge') && window.__hg.state.works.length === 0));
   check('no page errors (preview)', errors.length === 0, errors.join('\n'));
+  await page.close();
+}
+
+// ---- 10. プレーヤーから戻る（スマホ）: 左上の「戻る」が常に出る／隠れている操作は最初のタップで出すだけ／ブラウザの戻るでも閉じる
+{
+  // スマホ相当（タッチ）。マウスと違い、タップの前に「動かした」イベントが来ない
+  const { page, errors } = await openPage({ width: 390, height: 844 }, '', { hasTouch: true, isMobile: true });
+  await page.evaluate(() => window.__hg.loadSamples());
+  await page.waitForFunction(() => window.__hg.state.works.length === 6, null, { timeout: 30000 });
+  const inPlayer = () => page.evaluate(() => document.body.classList.contains('playing'));
+  await page.click('#go');
+  check('back button visible in player', await page.evaluate(() => document.querySelector('#back').checkVisibility()));
+  // 操作が隠れるまで待つ → 戻るは薄く残り、画面のタップでは止まらず操作が出る
+  await page.waitForFunction(() => document.body.classList.contains('idle'), null, { timeout: 10000 });
+  await page.waitForTimeout(500); // 薄くなるアニメーションが終わるまで
+  const idle = await page.evaluate(() => ({ back: +getComputedStyle(document.querySelector('#back')).opacity, bar: +getComputedStyle(document.querySelector('#bar')).opacity }));
+  check('back stays visible while controls hide', idle.back > 0.2 && idle.back < 0.9 && idle.bar < 0.1, JSON.stringify(idle));
+  await page.touchscreen.tap(195, 400);
+  check('first tap while idle shows controls without pausing', await page.evaluate(() => window.__hg.state.playing && !document.body.classList.contains('idle')));
+  await page.click('#back');
+  check('back button returns to editor', !(await inPlayer()));
+  // 閉じた直後に開き直しても、遅れて届く「戻る」で閉じない
+  await page.click('#go');
+  await page.waitForTimeout(600);
+  check('reopen right after closing stays open', await inPlayer());
+  // ブラウザの戻る（スワイプ）で閉じ、ページからは出ない
+  const url = page.url().split('#')[0];
+  await page.goBack();
+  await page.waitForFunction(() => !document.body.classList.contains('playing'), null, { timeout: 10000 }).catch(() => {});
+  check('browser back closes the player', !(await inPlayer()) && page.url().split('#')[0] === url, page.url());
+  // 何度開け閉めしても履歴が増え続けない（戻るを押す回数が増えない）
+  const len0 = await page.evaluate(() => history.length);
+  for (let k = 0; k < 3; k++) {
+    await page.click('#go');
+    await page.waitForTimeout(150);
+    await page.click('#back');
+    await page.waitForTimeout(300);
+  }
+  const len1 = await page.evaluate(() => history.length);
+  check('history does not pile up', len1 <= len0 + 1 && !(await inPlayer()), `${len0} -> ${len1}`);
+  check('no page errors (player back)', errors.length === 0, errors.join('\n'));
   await page.close();
 }
 
