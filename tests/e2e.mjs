@@ -38,6 +38,12 @@ async function openPage(viewport, hash = '') {
   page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
   page.on('console', (m) => { if (m.type() === 'error') errors.push('console: ' + m.text()); });
   await page.goto(`http://localhost:8941/${hash}`, { waitUntil: 'networkidle' });
+  // アプリが起動しなかった（WebGL2 が使えない等）ときは、画面の表示とエラーを出して原因を分かるようにする
+  const started = await page.waitForFunction(() => window.__hg, null, { timeout: 30000 }).then(() => true, () => false);
+  if (!started) {
+    const text = (await page.evaluate(() => document.body.innerText).catch(() => '')).slice(0, 400);
+    throw new Error(`アプリが起動しなかった: ${text}\n${errors.join('\n')}`);
+  }
   return { page, errors };
 }
 
