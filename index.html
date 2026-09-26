@@ -66,17 +66,21 @@
   #drop {
     margin-top: 28px; border: 1.5px dashed #3a3a42; border-radius: 14px; padding: 28px 20px;
     display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center;
-    transition: border-color 0.15s, background 0.15s;
+    transition: border-color 0.15s, background 0.15s; cursor: pointer;
   }
+  #drop:hover, #drop:focus-visible { border-color: #5a5a64; background: rgba(255, 255, 255, 0.025); outline: none; }
+  #drop .pick { font-size: 13px; color: var(--ink); text-decoration: underline; text-underline-offset: 4px; text-decoration-color: var(--line); }
   #drop.over { border-color: var(--accent); background: rgba(255, 75, 62, 0.06); }
   #drop .big { font-size: 18px; font-weight: 700; }
   #drop .small { font-size: 12px; color: var(--sub); }
+  #drop .small span { display: inline-block; } /* まとまりの途中で折り返さない */
   .row { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
   .btn {
     border: 1px solid var(--line); background: var(--panel); border-radius: 999px;
     padding: 10px 18px; font-size: 13px; letter-spacing: 0.04em; transition: border-color 0.12s, transform 0.08s;
   }
   .btn:hover { border-color: #55555f; }
+  a.btn { display: inline-block; color: inherit; text-decoration: none; }
   .btn:active { transform: scale(0.97); }
   .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 700; }
   .btn.primary:disabled { opacity: 0.35; cursor: default; }
@@ -84,8 +88,11 @@
 
   #works { margin-top: 24px; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px; }
   .work { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; position: relative; }
-  .work.dragging { opacity: 0.4; }
-  .work.dropbefore { box-shadow: -4px 0 0 var(--accent); }
+  .work { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  .work input.title { -webkit-user-select: text; user-select: text; }
+  .work.sort-hole { opacity: 0.25; border-style: dashed; border-color: var(--accent); }
+  .sort-ghost { position: fixed; left: 0; top: 0; z-index: 60; margin: 0; pointer-events: none; opacity: 0.95; box-shadow: 0 14px 40px rgba(0,0,0,0.55); border-color: var(--accent); }
+  body.sorting, body.sorting * { cursor: grabbing !important; }
   .work .thumb { position: relative; aspect-ratio: 1; background: #000 center/contain no-repeat; cursor: pointer; }
   .work .thumb::after {
     content: "注目点を編集"; position: absolute; left: 50%; bottom: 8px; transform: translateX(-50%);
@@ -135,7 +142,7 @@
   .work input.title:hover { border-bottom-color: var(--sub); }
   .work input.title:focus { outline: none; border-bottom: 1px solid var(--accent); }
   .work .x { position: absolute; top: 6px; right: 6px; width: 24px; height: 24px; border-radius: 50%; border: none; background: rgba(0,0,0,0.65); font-size: 13px; line-height: 24px; }
-  .work .grip { position: absolute; top: 6px; left: 6px; font-size: 11px; padding: 2px 6px; border-radius: 6px; background: rgba(0,0,0,0.65); cursor: grab; font-family: var(--mono); }
+  .work .grip { position: absolute; top: 6px; left: 6px; font-size: 12px; padding: 6px 10px; border-radius: 8px; background: rgba(0,0,0,0.65); cursor: grab; font-family: var(--mono); touch-action: none; z-index: 1; }
   .hint { margin-top: 10px; font-size: 12px; color: var(--sub); }
   .works-bar { margin-top: 12px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
   .works-bar[hidden] { display: none; }
@@ -192,6 +199,32 @@
   .ver { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em; color: var(--sub); }
   .ver a { color: inherit; }
   #ver-kicker { margin-left: 0.6em; color: var(--accent); }
+  /* ---------- 演出カタログ ---------- */
+  #catalog { position: fixed; inset: 0; z-index: 20; overflow-y: auto; background: var(--bg); transition: opacity 0.25s; }
+  #catalog[hidden] { display: none; }
+  body.catalog #editor { display: none; }
+  body.playing #catalog { opacity: 0; pointer-events: none; }
+  .cat-head { display: grid; grid-template-columns: auto 1fr; gap: 10px 18px; align-items: center; }
+  .cat-head h2 { font-size: clamp(26px, 5vw, 40px); font-weight: 900; letter-spacing: -0.01em; }
+  .cat-head .kicker { margin-bottom: 2px; }
+  .cat-head .hint { grid-column: 1 / -1; margin: 0; }
+  .cat-head #cat-back { justify-self: start; }
+  .cat-tabs { margin-top: 22px; position: sticky; top: 10px; z-index: 2; box-shadow: 0 4px 18px rgba(0,0,0,0.5); }
+  .cat-tabs button span { font-family: var(--mono); font-size: 10px; opacity: 0.6; margin-left: 2px; }
+  .cat-grid { margin-top: 18px; display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
+  .cat-card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; }
+  .cat-card canvas { display: block; width: 100%; aspect-ratio: 16 / 9; background: #000; opacity: 0.25; transition: opacity 0.3s; }
+  .cat-card.ready canvas { opacity: 1; }
+  .cat-card { transition: border-color 0.2s, box-shadow 0.2s; }
+  .cat-card.live { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .cat-meta { padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 8px; flex: 1; }
+  .cat-name { display: flex; align-items: baseline; gap: 8px; }
+  .cat-name b { font-size: 15px; }
+  .cat-name code { font-family: var(--mono); font-size: 10px; color: var(--sub); }
+  .cat-desc { font-size: 12px; color: #bdbab3; line-height: 1.6; flex: 1; }
+  .cat-row { display: flex; align-items: center; gap: 10px; }
+  .cat-row .btn { padding: 7px 14px; font-size: 12px; }
+  .cat-row .hint { margin: 0; }
   #preview-badge { position: fixed; top: calc(10px + env(safe-area-inset-top)); right: 10px; z-index: 60; font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: 0.08em; padding: 6px 12px; border-radius: 999px; background: #ffd23e; color: #111; text-decoration: none; box-shadow: 0 2px 10px rgba(0,0,0,0.4); }
 
   /* ---------- プレイヤー操作 ---------- */
@@ -218,9 +251,11 @@
   #seek .track { position: absolute; left: 0; right: 0; top: 8px; height: 3px; background: rgba(255,255,255,0.2); border-radius: 2px; }
   #seek .fill { position: absolute; left: 0; top: 8px; height: 3px; width: 100%; background: var(--accent); transform-origin: 0 0; border-radius: 2px; }
   #seek .mark { position: absolute; top: 5px; width: 1px; height: 9px; background: rgba(255,255,255,0.45); }
+  .field label .cat-link { margin-left: 10px; color: var(--accent); letter-spacing: 0.04em; text-decoration: none; white-space: nowrap; }
+  .field label .cat-link:hover { text-decoration: underline; }
+  #fs[hidden] { display: none; }
   .controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .controls .btn { padding: 8px 14px; font-size: 12px; background: rgba(20,20,23,0.8); }
-  .controls .btn.muted { opacity: 0.6; }
   .controls .info { font-family: var(--mono); font-size: 11px; color: #bdbab3; letter-spacing: 0.08em; margin-right: auto; display: flex; gap: 14px; flex-wrap: wrap; }
   .controls .info b { color: #fff; }
   #perf {
@@ -281,22 +316,19 @@
   </header>
   <div class="wrap">
 
-    <div id="drop">
+    <div id="drop" role="button" tabindex="0" aria-label="イラストを選ぶ（ドロップも可）">
       <div class="big">イラストをドロップ</div>
-      <div class="small">PNG / JPG / WebP ・ 複数可 ・ 2〜12枚くらいがおすすめ</div>
-      <div class="row">
-        <button class="btn" id="pick">ファイルを選ぶ</button>
-        <button class="btn" id="sample">サンプルで試す</button>
-      </div>
-      <input type="file" id="file" accept="image/*" multiple>
+      <div class="pick">またはここを押して選ぶ</div>
+      <div class="small"><span>PNG / JPG / WebP ・ 複数可</span> ・ <span>2〜12枚くらいがおすすめ</span></div>
     </div>
+    <input type="file" id="file" accept="image/*" multiple hidden>
 
     <div id="works"></div>
     <div class="works-bar" id="works-bar" hidden>
       <span class="hint">作業内容はこのブラウザに自動で保存され、次に開いたときに元に戻ります（外部には送信しません）</span>
       <button class="btn" id="clear-works">すべて外す</button>
     </div>
-    <div class="hint" id="works-hint" hidden>作品名はカードの下で書き換えられます。丸は注目点（番号＝優先順。1番が一番見せたい箇所）で、サムネイルをタップすると編集できます（赤＝自動検出、緑＝手動）。カードのドラッグで並べ替え。作品名と注目点は、詳細設定を閉じていても映像に反映されます。</div>
+    <div class="hint" id="works-hint" hidden>作品名はカードの下で書き換えられます。丸は注目点（番号＝優先順。1番が一番見せたい箇所）で、サムネイルをタップすると編集できます（赤＝自動検出、緑＝手動）。並べ替えはカードをドラッグ（スマホは左上の番号札をドラッグするか、カードを長押し）。作品名と注目点は、詳細設定を閉じていても映像に反映されます。</div>
 
     <div class="grid-form">
       <div class="field">
@@ -314,7 +346,7 @@
       <div class="field">
         <label>ASPECT / 画面比率</label>
         <div class="seg" id="aspect">
-          <button data-v="16:9" class="on">16:9</button><button data-v="9:16">9:16</button><button data-v="1:1">1:1</button>
+          <button data-v="16:9" class="on">16:9</button><button data-v="4:3">4:3</button><button data-v="1:1">1:1</button><button data-v="3:4">3:4</button><button data-v="9:16">9:16</button>
         </div>
       </div>
     </div>
@@ -331,21 +363,21 @@
         </div>
       </div>
       <div class="field">
-        <label>STYLE / スタイル</label>
+        <label>STYLE / スタイル<a class="cat-link" href="#catalog=style">カタログで見る →</a></label>
         <div class="seg" id="style">
-          <button data-v="auto" class="on">おまかせ</button><button data-v="NOIR">NOIR</button><button data-v="SWISS">SWISS</button><button data-v="POP">POP</button><button data-v="EDITORIAL">EDITORIAL</button><button data-v="GLITCH">GLITCH</button><button data-v="MONO">MONO</button><button data-v="NEON">NEON</button><button data-v="PASTEL">PASTEL</button><button data-v="RETRO">RETRO</button><button data-v="MIX" title="作品ごとにスタイルを抽選">ミックス</button>
+          <button data-v="auto" class="on">おまかせ</button>
         </div>
       </div>
       <div class="field">
-        <label>OPENING / オープニング</label>
+        <label>OPENING / オープニング<a class="cat-link" href="#catalog=opener">カタログで見る →</a></label>
         <div class="seg" id="opener">
-          <button data-v="auto" class="on">おまかせ</button><button data-v="montage">モンタージュ</button><button data-v="type">タイプ</button><button data-v="shutter">シャッター</button><button data-v="countdown">カウント</button><button data-v="knockout">抜き文字</button><button data-v="slice">スライス</button><button data-v="tunnel">トンネル</button><button data-v="boot">起動ログ</button>
+          <button data-v="auto" class="on">おまかせ</button>
         </div>
       </div>
       <div class="field">
-        <label>ENDING / エンディング</label>
+        <label>ENDING / エンディング<a class="cat-link" href="#catalog=closer">カタログで見る →</a></label>
         <div class="seg" id="closer">
-          <button data-v="auto" class="on">おまかせ</button><button data-v="grid">グリッド</button><button data-v="filmstrip">フィルム</button><button data-v="stack">スタック</button><button data-v="knockout">抜き文字</button><button data-v="orbit">オービット</button><button data-v="curtain">カーテン</button><button data-v="rewind">巻き戻し</button>
+          <button data-v="auto" class="on">おまかせ</button>
         </div>
       </div>
       <div class="field">
@@ -372,10 +404,25 @@
     </div>
 
     <p class="note">
-      操作: Space 再生/停止 ・ R 別バージョン（シード変更）・ ← → 前/次の作品 ・ M 音の切り替え ・ F 全画面 ・ E 編集に戻る ・ P パフォーマンス表示<br>
+      操作: Space 再生/停止 ・ R 別バージョン（シード変更）・ ← → 前/次の作品 ・ F 全画面 ・ E 編集に戻る ・ P パフォーマンス表示<br>
       書き出しは1コマずつ描いて MP4 にします（1080p / 4K・60 / 30fps）。対応していないブラウザでは実時間の録画になります。
     </p>
     <p class="ver" id="ver"></p>
+  </div>
+</section>
+
+<section id="catalog" hidden>
+  <div class="wrap">
+    <header class="cat-head">
+      <a class="btn" href="#" id="cat-back">← 作る画面へ</a>
+      <div>
+        <div class="kicker">HAYAGAWARI</div>
+        <h2>演出カタログ</h2>
+      </div>
+      <p class="hint">同じサンプル作品で、演出を 1 つずつ見比べられます。画面の中央のカード（PC ではマウスを乗せたカード）がその場で動き、ほかはコマ送りで動きます。「▶ 全画面で再生」でその演出だけの短い映像を大きく流します（E キーで戻る）。</p>
+    </header>
+    <nav class="seg cat-tabs" id="cat-tabs"></nav>
+    <div class="cat-grid" id="cat-grid"></div>
   </div>
 </section>
 
@@ -389,7 +436,6 @@
       <span>BPM <b id="i-bpm">-</b></span>
       <span>SEED <b id="i-seed">-</b></span>
     </div>
-    <button class="btn" id="snd" title="音の切り替え (M)">🔊 ビート＋効果音</button>
     <button class="btn" id="reroll" title="R">🎲 別バージョン</button>
     <button class="btn" id="export">⤓ 書き出し</button>
     <button class="btn" id="fs" title="F">⛶</button>
@@ -420,7 +466,6 @@
     <div class="xp-head"><b>書き出し</b></div>
     <div class="field"><label>RESOLUTION / 解像度</label><div class="seg" id="xp-res"><button data-v="1" class="on">1080p</button><button data-v="2">4K</button></div></div>
     <div class="field"><label>FRAME RATE / フレームレート</label><div class="seg" id="xp-fps"><button data-v="60" class="on">60fps</button><button data-v="30">30fps</button></div></div>
-    <div class="field"><label>SOUND / 音声</label><div class="seg" id="xp-snd"><button data-v="full" class="on">ビート＋効果音</button><button data-v="sfx">効果音のみ</button><button data-v="off">なし</button></div></div>
     <p class="hint" id="xp-info">判定中…</p>
     <div id="xp-progress" hidden><div class="xp-bar"><div id="xp-fill"></div></div><div class="hint" id="xp-status"></div></div>
     <div class="xp-actions"><button class="btn" id="xp-close">閉じる</button><button class="btn primary" id="xp-start">⤓ 書き出す</button></div>

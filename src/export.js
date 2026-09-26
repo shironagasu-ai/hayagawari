@@ -93,7 +93,7 @@ const yieldToUI = () => new Promise((r) => { yieldQueue.push(r); channel.port2.p
  * @param {object} o.enc pickEncoderConfig の結果
  * @param {(p:number, info:object)=>void} o.onProgress
  * @param {AbortSignal} o.signal
- * @param {{buffer: AudioBuffer, enc: object}} [o.audio] 音声（省略で映像のみ）
+ * @param {{buffer: AudioBuffer, enc: object}} [o.audio] 音声（省略で映像のみ。v1.0.0 では使っていない。BGM の持ち込み（v1.1）で使う予定）
  * @returns {Promise<Blob>}
  */
 export async function exportFrames({ canvas, renderAt, duration, fps, enc, onProgress, signal, audio }) {

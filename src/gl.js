@@ -158,6 +158,10 @@ uniform vec4 u_slice;     // 軸(0=横帯が横へ /1=縦帯が縦へ /2=観音�
 uniform float u_glitch;
 uniform float u_time;
 uniform float u_alpha;
+uniform vec2 u_scale2;    // 縦横別の縮み（ブラウン管・フリップ用。1,1 で無効）
+uniform float u_pixel;    // モザイクのマス目（px。0 で無効）
+uniform vec3 u_cells;     // マス目ごとに抜く: 種別(0なし 1ノイズで溶ける 2網点), しきい値, マス目(px)
+uniform vec2 u_tone;      // 明るさを足す量, 暗くする量（ブラウン管の光・フリップの陰）
 out vec4 o;
 
 float hash(float n){ return fract(sin(n * 127.1) * 43758.5453); }
@@ -176,6 +180,7 @@ void main(){
   vec2 d = (uv - u_center) * asp;
   float c = cos(-u_rot), s = sin(-u_rot);
   d = vec2(d.x*c - d.y*s, d.x*s + d.y*c) / u_scale;
+  d /= max(u_scale2, vec2(1e-4));
   uv = u_center + d / asp;
 
   bool doorL = false, doorR = false;
@@ -199,6 +204,11 @@ void main(){
     if (h > 1.0 - u_glitch * 0.8) uv.x += (hash(band * 3.1 + u_time) - 0.5) * 0.25 * u_glitch;
   }
 
+  if (u_pixel > 1.0) {
+    vec2 q = u_res / u_pixel;
+    uv = (floor(uv * q) + 0.5) / q;
+  }
+
   vec4 col;
   float bl = dot(u_blurDir, u_blurDir);
   if (bl > 1e-7 || u_radial > 0.001) {
@@ -217,10 +227,26 @@ void main(){
   if (u_mask.x > 0.5) {
     vec2 p = (v_uv - u_mask.zw) * asp;
     vec2 far = max(abs(vec2(0.0) - u_mask.zw), abs(vec2(1.0) - u_mask.zw)) * asp;
-    float r = u_mask.y * length(far);
     float px = 1.0 / u_res.y;
-    col *= clamp(0.5 - (length(p) - r) / (1.5 * px), 0.0, 1.0);
+    // 1: 円（アイリス） 2: ひし形（中心からの距離をマンハッタン距離で測る）
+    float dist = u_mask.x < 1.5 ? length(p) : abs(p.x) + abs(p.y);
+    float r = u_mask.y * (u_mask.x < 1.5 ? length(far) : far.x + far.y);
+    col *= clamp(0.5 - (dist - r) / (1.5 * px), 0.0, 1.0);
   }
+  if (u_cells.x > 0.5) {
+    vec2 g = v_uv * u_res / u_cells.z;
+    vec2 cell = floor(g);
+    if (u_cells.x < 1.5) {
+      // ノイズで溶ける: マス目ごとの乱数がしきい値より小さいマスを抜く
+      float h = fract(sin(dot(cell, vec2(12.9898, 78.233))) * 43758.5453);
+      if (h < u_cells.y) col = vec4(0.0);
+    } else {
+      // 網点: マス目の中心からの距離が半径を超えたら抜く（半径 1.42 でマス全体）
+      float rr = length(fract(g) - 0.5) * 2.0;
+      col *= clamp((u_cells.y - rr) * u_cells.z * 0.5 + 0.5, 0.0, 1.0);
+    }
+  }
+  col.rgb = col.rgb * (1.0 - u_tone.y) + u_tone.x * col.a;
   o = col * u_alpha;
 }`;
 
@@ -473,7 +499,11 @@ export class Renderer {
     gl.uniform1f(u.u_rot, t.rot || 0);
     gl.uniform2f(u.u_blurDir, t.bx || 0, t.by || 0);
     gl.uniform1f(u.u_radial, t.radial || 0);
-    gl.uniform4f(u.u_mask, t.circle ? 1 : 0, t.circle ?? 1, t.mx ?? 0.5, t.my ?? 0.5);
+    gl.uniform4f(u.u_mask, t.diamond ? 2 : t.circle ? 1 : 0, t.diamond ?? t.circle ?? 1, t.mx ?? 0.5, t.my ?? 0.5);
+    gl.uniform2f(u.u_scale2, t.sx ?? 1, t.sy ?? 1);
+    gl.uniform1f(u.u_pixel, t.pixel || 0);
+    gl.uniform3f(u.u_cells, t.cells || 0, t.cellT ?? 0, t.cellPx || 16);
+    gl.uniform2f(u.u_tone, t.bright || 0, t.shade || 0);
     gl.uniform4f(u.u_slice, t.sliceAxis || 0, t.slices || 0, t.sliceP || 0, t.sliceDir || 1);
     gl.uniform1f(u.u_glitch, t.glitch || 0);
     gl.uniform1f(u.u_time, t.time || 0);
