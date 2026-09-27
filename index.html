@@ -208,6 +208,26 @@
   .song-bar { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--sub); }
   #song-tap.hit { animation: taphit 0.18s ease-out; }
   @keyframes taphit { from { background: var(--accent); border-color: var(--accent); color: #fff; } }
+  /* 出さない演出 */
+  .ex-hint { margin: 0 0 10px !important; }
+  #exclude { display: flex; flex-direction: column; gap: 6px; }
+  .ex-cat { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+  .ex-cat > summary { list-style: none; cursor: pointer; display: flex; align-items: baseline; gap: 10px; padding: 9px 12px; font-size: 13px; }
+  .ex-cat > summary::-webkit-details-marker { display: none; }
+  .ex-cat > summary::before { content: "▸"; color: var(--sub); display: inline-block; transition: transform 0.15s; }
+  .ex-cat[open] > summary::before { transform: rotate(90deg); }
+  .ex-count { font-size: 11px; color: var(--sub); }
+  .ex-cat.has-ex .ex-count { color: var(--accent); }
+  .ex-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 12px 10px; }
+  .ex-chips button {
+    border: 1px solid var(--line); background: transparent; color: var(--ink); border-radius: 999px;
+    padding: 5px 11px; font: inherit; font-size: 12px; cursor: pointer;
+  }
+  .ex-chips button:hover { border-color: var(--sub); }
+  .ex-chips button.off { color: var(--sub); text-decoration: line-through; border-style: dashed; }
+  .ex-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 0 12px 12px; }
+  .ex-tools .cat-link { margin-left: auto; color: var(--accent); font-size: 12px; text-decoration: none; }
+  .ex-tools .cat-link:hover { text-decoration: underline; }
   #adv-reset { margin-left: auto; padding: 5px 12px; font-size: 11px; font-weight: 400; }
   #adv-reset[hidden] { display: none; }
   body:not(.adv-open) .adv-only { display: none !important; }
@@ -244,6 +264,11 @@
   .cat-row { display: flex; align-items: center; gap: 10px; }
   .cat-row .btn { padding: 7px 14px; font-size: 12px; }
   .cat-row .hint { margin: 0; }
+  .cat-row .cat-ex { margin-left: auto; padding: 6px 12px; font-size: 11px; }
+  .cat-row .cat-ex[hidden] { display: none; }
+  .cat-card.off .cat-ex { border-color: var(--accent); color: var(--accent); }
+  .cat-card.off canvas { filter: grayscale(1); }
+  .cat-card.off .cat-name b { text-decoration: line-through; color: var(--sub); }
   #preview-badge { position: fixed; top: calc(10px + env(safe-area-inset-top)); right: 10px; z-index: 60; font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: 0.08em; padding: 6px 12px; border-radius: 999px; background: #ffd23e; color: #111; text-decoration: none; box-shadow: 0 2px 10px rgba(0,0,0,0.4); }
 
   /* ---------- プレイヤー操作 ---------- */
@@ -431,6 +456,11 @@
           <button data-v="keep" class="on">この順番</button><button data-v="shuffle">シードで並べ替え</button>
         </div>
       </div>
+      <div class="field wide">
+        <label>EXCLUDE / 出さない演出</label>
+        <p class="hint ex-hint">押した演出はおまかせの抽選に出なくなります（もう一度押すと戻る）。演出カタログの各カードの「出さない」でも切り替えられます。</p>
+        <div id="exclude"></div>
+      </div>
       <div class="field">
         <label>SEED / シード（同じシード＋同じ画像＝同じ映像）</label>
         <div class="seedrow">
@@ -464,7 +494,7 @@
         <div class="kicker">HAYAGAWARI</div>
         <h2>演出カタログ</h2>
       </div>
-      <p class="hint">同じサンプル作品で、演出を 1 つずつ見比べられます。画面の中央のカード（PC ではマウスを乗せたカード）がその場で動き、ほかはコマ送りで動きます。「▶ 全画面で再生」でその演出だけの短い映像を大きく流します（E キーで戻る）。</p>
+      <p class="hint">同じサンプル作品で、演出を 1 つずつ見比べられます。画面の中央のカード（PC ではマウスを乗せたカード）がその場で動き、ほかはコマ送りで動きます。「▶ 全画面で再生」でその演出だけの短い映像を大きく流します（E キーで戻る）。いらない演出は「出さない」を押すと、おまかせの抽選に出なくなります。</p>
     </header>
     <nav class="seg cat-tabs" id="cat-tabs"></nav>
     <div class="cat-grid" id="cat-grid"></div>
