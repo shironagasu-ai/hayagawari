@@ -544,7 +544,7 @@ async function sheet(page, file, rows) {
   }
   check('export sizes 540p / 720p / 4K / 1080p', JSON.stringify(sizes) === JSON.stringify(['960×540', '1280×720', '3840×2160', '1920×1080']), JSON.stringify(sizes));
   const noSoundUi = await page.evaluate(() => !document.querySelector('#snd') && !document.querySelector('#xp-snd'));
-  check('no sound controls (v1.0.0 has no sound)', !info.includes('音声') && noSoundUi, info);
+  check('no audio line or sound controls without a song', !info.includes('音声') && noSoundUi, info);
   const vcodec = (info.match(/1コマずつ（(\S+) \/ MP4）/) || [])[1];
   console.log(`codecs: video=${vcodec}`);
   // CI の Google Chrome では H.264 で書き出せるはず
