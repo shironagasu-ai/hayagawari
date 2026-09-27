@@ -1074,9 +1074,13 @@ async function sheet(page, file, rows) {
   await page.waitForTimeout(1500);
   check('song: cleared and not restored', await page.evaluate(() => !window.__hg.song.cur && document.querySelector('#song-panel').hidden));
   // 読めないファイル: 知らせて、状態は変えない
+  // 読み込み直した直後は保存した作品の復元が走り、終わると「前回の作業を復元しました」のトーストが出る。
+  // 曲の知らせと重なると取り違えるので、復元が済むのを待ってから選び、曲の知らせの文言が出るまで待つ
+  await page.waitForFunction(() => window.__hg.state.works.length === 6, null, { timeout: 60000 }).catch(() => {});
+  await page.waitForTimeout(300);
   await page.setInputFiles('#song-file', { name: 'broken.mp3', mimeType: 'audio/mpeg', buffer: Buffer.from('not audio at all') });
-  await page.waitForFunction(() => document.querySelector('#toast').classList.contains('show'), null, { timeout: 20000 });
-  check('song: unreadable file shows message', await page.evaluate(() => !window.__hg.song.cur && document.querySelector('#toast').textContent.includes('読み込めません')));
+  const unreadable = await page.waitForFunction(() => document.querySelector('#toast').textContent.includes('読み込めません'), null, { timeout: 20000 }).then(() => true, () => false);
+  check('song: unreadable file shows message', unreadable && await page.evaluate(() => !window.__hg.song.cur), await page.textContent('#toast'));
   check('no page errors (song)', errors.length === 0, errors.join('\n'));
   await page.close();
 }
