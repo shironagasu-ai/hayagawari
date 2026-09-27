@@ -889,6 +889,20 @@ async function sheet(page, file, rows) {
     });
     if (au.error) console.log('(song export audio decode skipped: ' + au.error + ')');
     else check('song export: audio is as long as the film and not silent', Math.abs(au.dur - 2) < 0.1 && au.rms > 0.01, JSON.stringify(au));
+    // 書き出し後の読み戻しの確認（音が入っていなければ画面で知らせる）が通っている
+    check('song export: exported audio verified after export', await page.evaluate(() => window.__hg.state.lastExport.audioOk === true));
+    // AAC を ADTS の見出し付きで出すエンコーダー向け: 見出しを取り除く（見出しがなければそのまま）
+    const adts = await page.evaluate(async () => {
+      const { stripAdts } = await import('./src/export.js');
+      const mk = (bytes) => new EncodedAudioChunk({ type: 'key', timestamp: 0, data: new Uint8Array(bytes) });
+      const read = (c) => { const d = new Uint8Array(c.byteLength); c.copyTo(d); return [...d]; };
+      return {
+        noCrc: read(stripAdts(mk([0xff, 0xf1, 0x4c, 0x80, 0x01, 0x7f, 0xfc, 1, 2, 3]))),
+        crc: read(stripAdts(mk([0xff, 0xf0, 0x4c, 0x80, 0x01, 0x7f, 0xfc, 9, 9, 1, 2]))),
+        raw: read(stripAdts(mk([0x21, 0x10, 5, 6, 7, 8, 9, 10]))),
+      };
+    });
+    check('song export: strips ADTS headers from AAC frames', JSON.stringify(adts) === JSON.stringify({ noCrc: [1, 2, 3], crc: [1, 2], raw: [0x21, 0x10, 5, 6, 7, 8, 9, 10] }), JSON.stringify(adts));
   } else {
     check('song export: dialog says the song is not included', xinfo.includes('曲は入りません'), xinfo);
     await page.click('#xp-close');

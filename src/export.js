@@ -44,7 +44,8 @@ const AUDIO_CANDIDATES = [
 export async function pickAudioConfig(sampleRate = 48000, numberOfChannels = 2) {
   if (typeof AudioEncoder === 'undefined' || !window.isSecureContext) return null;
   for (const c of AUDIO_CANDIDATES) {
-    const config = { codec: c.codec, sampleRate, numberOfChannels, bitrate: 192_000 };
+    // AAC は ADTS の見出しなしの素のフレームで出してもらう（MP4 にはこちらを入れる）
+    const config = { codec: c.codec, sampleRate, numberOfChannels, bitrate: 192_000, ...(c.muxCodec === 'aac' ? { aac: { format: 'aac' } } : {}) };
     try {
       const res = await AudioEncoder.isConfigSupported(config);
       if (res.supported) return { config: res.config || config, muxCodec: c.muxCodec, label: c.label };
@@ -53,11 +54,36 @@ export async function pickAudioConfig(sampleRate = 48000, numberOfChannels = 2) 
   return null;
 }
 
+// AAC の ADTS の見出し（0xFFF で始まる 7 / 9 バイト）があれば取り除く（format: 'aac' を無視するエンコーダー向け）
+export function stripAdts(chunk) {
+  const d = new Uint8Array(chunk.byteLength);
+  chunk.copyTo(d);
+  if (d.length < 7 || d[0] !== 0xff || (d[1] & 0xf6) !== 0xf0) return chunk;
+  const head = d[1] & 1 ? 7 : 9; // protection_absent = 1 なら CRC なし
+  return new EncodedAudioChunk({ type: chunk.type, timestamp: chunk.timestamp, duration: chunk.duration ?? undefined, data: d.subarray(head) });
+}
+
 // AudioBuffer を丸ごとエンコードして muxer へ（0.1 秒ずつ AudioData にする）
 async function encodeAudio(buffer, aenc, muxer) {
-  let failure = null;
+  let failure = null, chunks = 0;
+  const aac = aenc.muxCodec === 'aac';
   const encoder = new AudioEncoder({
-    output: (chunk, meta) => muxer.addAudioChunk(chunk, meta),
+    // output の中の例外はエンコーダーの外に出てこない（握りつぶされて音声が空のまま完了する）ので、拾って失敗にする
+    output: (chunk, meta) => {
+      try {
+        if (aac) {
+          chunk = stripAdts(chunk);
+          // 設定情報（AudioSpecificConfig）が空のまま渡ると、muxer の推測値が空で上書きされて再生できない音声になる
+          const desc = meta && meta.decoderConfig && meta.decoderConfig.description;
+          if (meta && meta.decoderConfig && !(desc && desc.byteLength >= 2)) {
+            const { description, ...rest } = meta.decoderConfig;
+            meta = { ...meta, decoderConfig: rest };
+          }
+        }
+        muxer.addAudioChunk(chunk, meta);
+        chunks++;
+      } catch (e) { failure = failure || e; }
+    },
     error: (e) => { failure = e; },
   });
   encoder.configure(aenc.config);
@@ -76,6 +102,24 @@ async function encodeAudio(buffer, aenc, muxer) {
   await encoder.flush();
   encoder.close();
   if (failure) throw failure;
+  if (!chunks) throw new Error('音声をエンコードできませんでした');
+}
+
+/**
+ * 書き出した MP4 の音声をこのブラウザで読み戻せるか確かめる（読めない・無音なら false）
+ * @param {Blob} blob
+ */
+export async function audioPlayable(blob) {
+  try {
+    const Ctx = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+    const ab = await new Ctx(1, 1, 48000).decodeAudioData(await blob.arrayBuffer());
+    const d = ab.getChannelData(0);
+    let peak = 0;
+    for (let i = 0; i < d.length; i += 64) peak = Math.max(peak, Math.abs(d[i]));
+    return ab.duration > 0.5 && peak > 1e-3;
+  } catch {
+    return false;
+  }
 }
 
 // タイマーの間引き（非表示タブで最大 1 秒）を受けずに、UI へ制御を返す

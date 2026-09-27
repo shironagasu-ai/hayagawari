@@ -6,7 +6,7 @@ import { buildFilm, fitTempo } from './director.js';
 import { SAMPLES, pickSamples, samplesByFile, fetchSamples } from './samples.js';
 import { randomSeed, createRng } from './rng.js';
 import { initFocalEditor, openFocalEditor } from './focal-editor.js';
-import { pickEncoderConfig, pickAudioConfig, exportFrames } from './export.js';
+import { pickEncoderConfig, pickAudioConfig, exportFrames, audioPlayable } from './export.js';
 import { newKey, putImage, saveSession, loadSession, requestPersist } from './store.js';
 import { song, initSong, setSongFile, clearSong, songMeta, stopPreview, musicPlay, musicPause, musicTime, musicLevel, songAudio } from './song.js';
 import { VERSION, BUILD, PREVIEW, storageKey } from './version.js';
@@ -734,6 +734,11 @@ async function startExport() {
     });
     download(blob, 'mp4');
     toast(`書き出し完了（${(blob.size / 1e6).toFixed(1)} MB・${xp.enc.label}${audio ? ' + ' + xp.aenc.label : ''} / MP4）`);
+    // 曲を入れたときは、書き出した音声をこのブラウザで読み戻せるか確かめる（入っていなければ知らせる）
+    if (audio) {
+      state.lastExport.audioOk = await audioPlayable(blob);
+      if (!state.lastExport.audioOk) toast(`書き出した動画の音声（${xp.aenc.label}）をこのブラウザで再生できませんでした。この端末では音が出ない可能性があります`);
+    }
     $('#xp').hidden = true;
   } catch (e) {
     if (e.name === 'AbortError') toast('書き出しを中止しました');
