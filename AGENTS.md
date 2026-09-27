@@ -35,11 +35,11 @@ src/kit.js          … 演出共通の部品（注目点・画像カメラ・�
 src/gl.js           … WebGL2 レンダラー（マスク・方向ブラー・トランジション合成・ポスト）
 src/analyze.js      … 注目点検出（顕著性マップ）とパレット抽出
 src/focal-editor.js … 注目点エディタ
-src/export.js       … 1 コマずつの書き出し（WebCodecs → MP4。音声を入れる仕組みもあるが v1.0.0 では使っていない）
+src/export.js       … 1 コマずつの書き出し（WebCodecs → MP4。持ち込んだ曲を AAC（なければ Opus）で入れる）
 src/store.js        … 作業の保存（IndexedDB）
-src/music.js        … 曲の解析（テンポ・拍・小節の頭の推定、タップでの補正。decodeSong 以外は DOM を使わず Node でも動く）
+src/music.js        … 曲の解析（テンポ・拍・小節の頭の推定、タップでの補正）と書き出し用の切り出し（cutSong）。decodeSong 以外は DOM を使わず Node でも動く
 src/music-worker.js … 曲の解析を Worker で動かす入口
-src/song.js         … 曲の欄の UI（選ぶ・試聴・手直し・保存）と、プレーヤーでの曲の同期再生（musicPlay / musicTime）
+src/song.js         … 曲の欄の UI（選ぶ・試聴・手直し・保存）と、プレーヤーでの曲の同期再生（musicPlay / musicTime）・書き出す音声（songAudio）
 src/version.js      … バージョン・ビルド情報・プレビュー判定・保存キー
 src/text.js         … 文字のテクスチャ化
 src/ease.js         … イージング（タメツメ用の cubic-bezier / 予備動作付き加速など）

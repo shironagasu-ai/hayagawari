@@ -706,6 +706,7 @@ async function sheet(page, file, rows) {
   for (let i = 0; i < x.length; i++) wav.writeInt16LE(Math.round(Math.max(-1, Math.min(1, x[i] * 0.8)) * 32767), 44 + i * 2);
 
   const { page, errors } = await openPage({ width: 1280, height: 800 });
+  check('song: BETA badge on the song field', await page.evaluate(() => document.querySelector('#song-field > label .beta').textContent === 'BETA'));
   check('song: panel hidden before choosing', await page.evaluate(() => document.querySelector('#song-panel').hidden && document.querySelector('#song-clear').hidden));
   await page.setInputFiles('#song-file', { name: 'test-beat.wav', mimeType: 'audio/wav', buffer: wav });
   await page.waitForFunction(() => window.__hg.song.cur, null, { timeout: 60000 });
@@ -830,20 +831,66 @@ async function sheet(page, file, rows) {
       window.__drawn = [];
       f.render = (r, t) => { window.__drawn.push({ t, mt: h.musicTime(f.music) }); return render(r, t); };
     });
-    const lastDrawn = () => page.evaluate(() => window.__drawn.filter((d) => d.mt !== null).slice(-3));
-    await page.waitForTimeout(1500);
+    // 描けたコマが揃うまで待つ（決まった時間だと、描画の遅い環境ではコマが足りない）
+    const drawnSince = (from, minT) => page.waitForFunction(({ from, minT }) => window.__drawn.slice(from).filter((d) => d.mt !== null && d.t >= minT).length >= 3, { from, minT }, { timeout: 60000 }).catch(() => {});
+    const lastDrawn = (from = 0) => page.evaluate((from) => window.__drawn.slice(from).filter((d) => d.mt !== null).slice(-3), from);
+    await drawnSince(0, 1);
     const a = await lastDrawn();
-    check('song sync: video clock follows the song while playing', a.length >= 2 && a[a.length - 1].t > 1 && a.every((d) => Math.abs(d.mt - d.t) < 0.05), JSON.stringify(a));
+    check('song sync: video clock follows the song while playing', a.length === 3 && a[2].t > 1 && a.every((d) => Math.abs(d.mt - d.t) < 0.05), JSON.stringify(a));
+    const mark = await page.evaluate(() => window.__drawn.length);
     await page.keyboard.press('ArrowRight');
     await page.keyboard.press('ArrowRight');
-    await page.waitForTimeout(800);
     const start = await page.evaluate(() => window.__hg.state.film.segments[2].start);
-    const b = await lastDrawn();
-    check('song sync: jumping to the next work moves the song too', b.length >= 2 && b[0].t >= start && b.every((d) => Math.abs(d.mt - d.t) < 0.05), JSON.stringify({ start, b }));
+    await drawnSince(mark, start);
+    const b = await lastDrawn(mark);
+    check('song sync: jumping to the next work moves the song too', b.length === 3 && b[0].t >= start && b.every((d) => Math.abs(d.mt - d.t) < 0.05), JSON.stringify({ start, b }));
     await page.evaluate(() => window.__hg.pause());
     check('song sync: pausing the film pauses the song', await page.evaluate(() => window.__hg.musicTime(window.__hg.state.film.music) === null));
   } else {
     console.log('(song sync playback skipped: audio playback unavailable in this browser)');
+  }
+  // 書き出し用の切り出し: 曲の offset から映像の尺だけ。頭は立ち上げ、最後はフェード、足りなければ無音、2ch
+  const cut = await page.evaluate(async () => {
+    const { cutSong } = await import('./src/music.js');
+    const sr = 1000, a = new Float32Array(5000).fill(1);
+    const [l, r] = cutSong([a], sr, { offset: 1, duration: 6, fadeFrom: 3, fadeTo: 4 });
+    return { n: [l.length, r.length], start: [l[0], l[10]], before: l[2999], mid: l[3500], after: l[4001], tail: l[5999], same: l.every((v, i) => v === r[i]) };
+  });
+  check('song export: cutSong trims, ramps in, fades out, pads and makes stereo',
+    cut.n[0] === 6000 && cut.n[1] === 6000 && cut.start[0] === 0 && cut.start[1] === 1 && cut.before === 1 && Math.abs(cut.mid - 0.5) < 0.01 && cut.after === 0 && cut.tail === 0 && cut.same, JSON.stringify(cut));
+  // 書き出し: 曲が入る（AAC、なければ Opus）。画面に音声の方式と権利の注意書き
+  await page.click('#export');
+  await page.click('#xp-fps button[data-v="30"]');
+  await page.waitForFunction(() => !document.querySelector('#xp-info').textContent.includes('判定中'));
+  const xinfo = await page.textContent('#xp-info');
+  const acodec = (xinfo.match(/音声: (\S+)（/) || [])[1];
+  console.log(`song export: audio=${acodec}`);
+  check('song export: dialog shows the rights notice', xinfo.includes('曲の権利はご自身で確認'), xinfo);
+  if (acodec) {
+    check('song export: dialog shows the audio codec and song', xinfo.includes('test-beat.wav'), xinfo);
+    if (process.env.EXPECT_H264 === '1') check('AAC available in Google Chrome', acodec === 'AAC', `audio=${acodec}`);
+    await page.evaluate(() => { window.__hg.xp.limit = 2; });
+    const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 300000 }), page.click('#xp-start')]);
+    const file = join(outDir, 'export-song.mp4');
+    await dl.saveAs(file);
+    const bytes = readFileSync(file).toString('latin1');
+    check('song export: mp4 has an audio track', bytes.includes('soun') && (bytes.includes('mp4a') || bytes.includes('Opus')));
+    // 音声を読み戻して、長さと音が入っていることを確かめる（読めないブラウザでは省く）
+    const au = await page.evaluate(async () => {
+      try {
+        const buf = await window.__hg.state.lastExport.blob.arrayBuffer();
+        const ab = await new OfflineAudioContext(2, 1, 48000).decodeAudioData(buf);
+        const d = ab.getChannelData(0);
+        let s = 0;
+        for (let i = 0; i < d.length; i++) s += d[i] * d[i];
+        return { dur: ab.duration, rms: Math.sqrt(s / d.length) };
+      } catch (e) { return { error: String(e) }; }
+    });
+    if (au.error) console.log('(song export audio decode skipped: ' + au.error + ')');
+    else check('song export: audio is as long as the film and not silent', Math.abs(au.dur - 2) < 0.1 && au.rms > 0.01, JSON.stringify(au));
+  } else {
+    check('song export: dialog says the song is not included', xinfo.includes('曲は入りません'), xinfo);
+    await page.click('#xp-close');
   }
   await page.click('#back');
   await page.waitForTimeout(300);
