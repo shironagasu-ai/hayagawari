@@ -29,16 +29,33 @@ jobs:
       # src/version.js・package.json・CHANGELOG.md のバージョンがそろっているか
       - run: node tools/check-version.mjs
 
-  e2e:
-    name: E2E (${{ matrix.browser }})
+  unit:
+    name: Unit tests
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      # 画面を使わない計算（曲の解析・曲に合わせたテンポ・AAC の設定情報など）。数秒で終わる
+      - run: npm run test:unit
+
+  e2e:
+    # 一般配布の Google Chrome で、テストを 2 つに分けて同時に走らせる（待ち時間を約半分に）。
+    # H.264 が使えないブラウザの経路（VP9 で書き出す）は、テストの中で H.264 を外して確かめる
+    name: E2E (${{ matrix.shard }}/2)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        # chromium: Playwright の Chromium（H.264 / AAC エンコーダなし → VP9 / Opus で書き出し）
-        # chrome:   一般配布の Google Chrome（H.264 で書き出せることも確認）
-        browser: [chromium, chrome]
+        shard: [1, 2]
+    env:
+      E2E_SHARD: ${{ matrix.shard }}
+      EXPECT_H264: 1
+      # 比率違いの見本シート（目で見るための画像）は、Actions の画面から手で動かしたときだけ作る
+      E2E_ASPECT_SHEETS: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -46,23 +63,16 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: Install Playwright Chromium
-        if: matrix.browser == 'chromium'
-        run: npx playwright-core install --with-deps chromium
       - name: Use Google Chrome (stable)
-        if: matrix.browser == 'chrome'
         run: |
           google-chrome --version
           echo "CHROMIUM_PATH=$(command -v google-chrome)" >> "$GITHUB_ENV"
-          echo "EXPECT_H264=1" >> "$GITHUB_ENV"
-          # 比率違いの見本シート（目で見るための画像）は Chromium 側だけで作る（時間短縮）
-          echo "E2E_ASPECT_SHEETS=0" >> "$GITHUB_ENV"
-      - run: npm test
+      - run: npm run test:e2e
       - name: Upload screenshots and exported videos
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: e2e-output-${{ matrix.browser }}
+          name: e2e-output-${{ matrix.shard }}
           path: tests/output/
           retention-days: 7
           if-no-files-found: ignore

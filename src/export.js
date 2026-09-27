@@ -3,6 +3,8 @@
 // PC の負荷やタブの切り替えでコマ落ちせず、4K でも確実に全フレームが入る。
 // MP4 の組み立ては vendor/ の mp4-muxer（MIT）を書き出し時にだけ読み込む。
 
+import { aacSpecificConfig, bytesOf } from './aac.js';
+
 // 互換性の高い順。H.264 は一般配布の Chrome / Edge / Safari で使える（オープンソース版 Chromium には無い）
 const CANDIDATES = [
   { muxCodec: 'avc', label: 'H.264', codecs: (big) => (big ? ['avc1.640034', 'avc1.640033', 'avc1.4d0034', 'avc1.420034'] : ['avc1.64002a', 'avc1.640028', 'avc1.4d002a', 'avc1.42002a', 'avc1.42001f']) },
@@ -15,11 +17,13 @@ export function frameExportAvailable() {
 }
 
 // 使えるエンコーダ設定を探す。見つからなければ null（→ リアルタイム録画にフォールバック）
-export async function pickEncoderConfig(width, height, fps) {
+// skip: 候補から外すコーデック（'avc' など）。テストで H.264 が使えないブラウザと同じ経路を通すため
+export async function pickEncoderConfig(width, height, fps, skip = []) {
   if (!frameExportAvailable()) return null;
   const big = width * height > 2_300_000; // 1080p を超える
   const bitrate = Math.round(width * height * fps * (big ? 0.09 : 0.13)); // 1080p60 ≈ 16Mbps / 4K60 ≈ 45Mbps
   for (const c of CANDIDATES) {
+    if (skip.includes(c.muxCodec)) continue;
     for (const codec of c.codecs(big)) {
       const config = {
         codec, width, height, bitrate, framerate: fps,
@@ -64,44 +68,6 @@ export function stripAdts(chunk) {
 }
 
 const hex = (d, n = 24) => [...d.subarray(0, n)].map((b) => b.toString(16).padStart(2, '0')).join(' ') + (d.length > n ? ' …' : '');
-const bytesOf = (b) => (ArrayBuffer.isView(b) ? new Uint8Array(b.buffer, b.byteOffset, b.byteLength) : new Uint8Array(b));
-
-/**
- * AAC の設定情報（decoderConfig.description）から AudioSpecificConfig（2〜5 バイト）を取り出す。
- * エンコーダーによっては（Apple の AAC など）esds の中身（ES_Descriptor）や esds の箱ごとで返すので、
- * 中の DecoderSpecificInfo（タグ 0x05）を探す。読めなければ null（→ muxer の推測値 AAC-LC を使う）
- */
-export function aacSpecificConfig(desc) {
-  if (!desc || !desc.byteLength) return null;
-  let d = bytesOf(desc);
-  const ok = (a) => a && a.length >= 2 && a.length <= 5 && a[0] >> 3 >= 1 && a[0] >> 3 <= 31 ? new Uint8Array(a) : null;
-  // esds の箱ごと（大きさ 4 バイト + 'esds' + version/flags 4 バイト）
-  if (d.length > 12 && String.fromCharCode(d[4], d[5], d[6], d[7]) === 'esds') d = d.subarray(12);
-  if (d[0] !== 0x03) return ok(d); // 素の AudioSpecificConfig
-  // 記述子を順に読む: タグ 1 バイト + 長さ（7 ビットずつ、最大 4 バイト）
-  let i = 0;
-  const head = () => {
-    const tag = d[i++];
-    let len = 0;
-    for (let k = 0; k < 4 && i < d.length; k++) { const b = d[i++]; len = (len << 7) | (b & 0x7f); if (!(b & 0x80)) break; }
-    return { tag, len };
-  };
-  try {
-    if (head().tag !== 0x03) return null;
-    const flags = d[i + 2];
-    i += 3; // ES_ID・flags
-    if (flags & 0x80) i += 2; // dependsOn_ES_ID
-    if (flags & 0x40) i += 1 + d[i]; // URL
-    if (flags & 0x20) i += 2; // OCR_ES_Id
-    if (head().tag !== 0x04) return null;
-    i += 13; // objectType・streamType・bufferSize・maxBitrate・avgBitrate
-    const dsi = head();
-    if (dsi.tag !== 0x05) return null;
-    return ok(d.subarray(i, i + dsi.len));
-  } catch {
-    return null;
-  }
-}
 
 // AudioBuffer を丸ごとエンコードして muxer へ（0.1 秒ずつ AudioData にする）
 // info: 診断用（設定情報の中身・件数・バイト数）。書き出したあとコンソールに出す

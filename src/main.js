@@ -715,7 +715,7 @@ function download(blob, ext) {
 
 // ---------------------------------------------------------------- 書き出し（1コマずつ・WebCodecs）
 
-const xp = { res: 1080, fps: 60, enc: null, aenc: null, abort: null, running: false, limit: 0 }; // res: 書き出す短辺のピクセル数（仮想解像度の短辺は 1080）/ limit: テスト用に書き出す秒数を制限
+const xp = { res: 1080, fps: 60, enc: null, aenc: null, abort: null, running: false, limit: 0, skip: [] }; // res: 書き出す短辺のピクセル数（仮想解像度の短辺は 1080）/ limit: テスト用に書き出す秒数を制限 / skip: テスト用に使わせないコーデック
 
 function exportSize() {
   const [W, H] = ASPECTS[state.aspect];
@@ -727,7 +727,7 @@ async function refreshExportInfo() {
   const [w, h] = exportSize();
   const info = $('#xp-info');
   info.textContent = '判定中…';
-  xp.enc = await pickEncoderConfig(w, h, xp.fps);
+  xp.enc = await pickEncoderConfig(w, h, xp.fps, xp.skip);
   const music = state.film.music && song.cur;
   xp.aenc = xp.enc && music ? await pickAudioConfig(48000, 2) : null;
   const d = state.film.duration;

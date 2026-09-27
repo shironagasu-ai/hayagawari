@@ -29,6 +29,10 @@ const browser = await chromium.launch({
 });
 const fails = [];
 const check = (name, cond, extra = '') => { console.log(`${cond ? 'PASS' : 'FAIL'}: ${name} ${extra}`); if (!cond) fails.push(name); };
+// CI では 2 つに分けて同時に走らせる（E2E_SHARD=1: 区 1〜3 ／ 2: 残り。省くと全部）。区 1 だけで全体の半分近くかかる
+const SHARD = process.env.E2E_SHARD || '';
+const inShard = (s) => !SHARD || SHARD === s;
+if (SHARD) console.log(`shard ${SHARD}`);
 
 async function openPage(viewport, hash = '', extra = {}) {
   const page = await browser.newPage({ viewport, ...extra });
@@ -95,7 +99,7 @@ async function sheet(page, file, rows) {
 }
 
 // ---- 1. 16:9 でサンプル読み込み → 生成 → 各時刻の描画
-{
+if (inShard('1')) {
   const { page, errors } = await openPage({ width: 1280, height: 720 }, '#adv=1&seed=TEST-0001&style=auto');
   await page.evaluate(() => window.__hg.loadSamples());
   await page.waitForFunction(() => window.__hg.state.works.length === 6, null, { timeout: 30000 });
@@ -341,7 +345,7 @@ async function sheet(page, file, rows) {
 }
 
 // ---- 2. 9:16 縦型
-{
+if (inShard('1')) {
   const { page, errors } = await openPage({ width: 540, height: 960 }, '#adv=1&seed=VERT-0002&aspect=9:16');
   await page.evaluate(() => window.__hg.loadSamples());
   await page.waitForFunction(() => window.__hg.state.works.length === 6, null, { timeout: 30000 });
@@ -360,7 +364,7 @@ async function sheet(page, file, rows) {
 }
 
 // ---- 3. 初回表示（詳細設定は閉じている＝すべておまかせ）
-{
+if (inShard('1')) {
   const { page, errors } = await openPage({ width: 1280, height: 800 }, '#seed=EASY-0003&style=GLITCH&opener=type');
   const visible = () => page.evaluate(() => ['#artist', '#subline', '#handle', '#aspect', '#style', '#seed', '#opener', '#pace'].map((q) => document.querySelector(q).checkVisibility()));
   check('accordion closed by default', await page.evaluate(() => !document.querySelector('#adv').open && !window.__hg.state.advOpen));
@@ -417,7 +421,7 @@ async function sheet(page, file, rows) {
 }
 
 // ---- 3b. 出さない演出: 外した演出は抽選に出ない／1 つは残す／URL・保存・カタログのボタン
-{
+if (inShard('2')) {
   const { page, errors } = await openPage({ width: 1280, height: 800 }, '#adv=1&seed=EX-0001');
   await page.evaluate(() => window.__hg.loadSamples());
   await page.waitForFunction(() => window.__hg.state.works.length === 6, null, { timeout: 30000 });
@@ -543,7 +547,7 @@ async function sheet(page, file, rows) {
 }
 
 // ---- 4. 書き出し（1コマずつ・WebCodecs）: 実際に MP4 を作り、<video> で再生できるか確認
-{
+if (inShard('2')) {
   // adv=1: 詳細設定を開いた状態＝指定のシードを使う（閉じているとシードが毎回ランダムになり結果がぶれる）
   const { page, errors } = await openPage({ width: 1280, height: 720 }, '#adv=1&seed=EXPORT-01');
   await page.evaluate(() => window.__hg.loadSamples());
@@ -632,12 +636,32 @@ async function sheet(page, file, rows) {
   await page.click('#xp-close');
   await page.waitForFunction(() => !window.__hg.xp.running, null, { timeout: 30000 });
   check('export can be cancelled', await page.evaluate(() => document.querySelector('#xp').hidden && !document.body.classList.contains('exporting')));
+  // H.264 が使えないブラウザと同じ経路: H.264 を候補から外すと VP9（なければ AV1）で書き出し、注意を出す。
+  // （CI の Chrome は H.264 が使えるので、この経路はここで強制して確かめる）
+  await page.evaluate(() => { window.__hg.xp.skip = ['avc']; window.__hg.xp.limit = 1; });
+  await page.click('#export');
+  await page.click('#xp-res button[data-v="540"]');
+  await page.waitForFunction(() => !document.querySelector('#xp-info').textContent.includes('判定中'));
+  const fbInfo = await page.textContent('#xp-info');
+  const fbCodec = (fbInfo.match(/1コマずつ（(\S+) \/ MP4）/) || [])[1];
+  check('without H.264: falls back to VP9 / AV1 and warns', ['VP9', 'AV1'].includes(fbCodec) && fbInfo.includes('H.264 が使えないため'), fbInfo);
+  const [fbDl] = await Promise.all([page.waitForEvent('download', { timeout: 300000 }), page.click('#xp-start')]);
+  await fbDl.saveAs(join(outDir, 'export-fallback.mp4'));
+  const fb = await page.evaluate(async () => {
+    const v = document.createElement('video');
+    v.muted = true;
+    v.src = URL.createObjectURL(window.__hg.state.lastExport.blob);
+    await new Promise((r, j) => { v.onloadedmetadata = r; v.onerror = () => j(new Error('video error')); });
+    return { w: v.videoWidth, h: v.videoHeight, dur: v.duration };
+  });
+  check('without H.264: exported video plays', fb.w === 960 && fb.h === 540 && Math.abs(fb.dur - 1) < 0.2, JSON.stringify(fb));
+  await page.evaluate(() => { window.__hg.xp.skip = []; window.__hg.xp.limit = 0; });
   check('no page errors (export)', errors.length === 0, errors.join('\n'));
   await page.close();
 }
 
 // ---- 5. 別ページから戻ったとき、ブラウザのフォーム復元で作品タイトルが作家名欄などにずれて入らない
-{
+if (inShard('2')) {
   const { page, errors } = await openPage({ width: 1280, height: 720 });
   await page.evaluate(() => window.__hg.loadSamples());
   await page.waitForFunction(() => window.__hg.state.works.length === 6, null, { timeout: 30000 });
@@ -651,7 +675,7 @@ async function sheet(page, file, rows) {
 }
 
 // ---- 7. 作業の保存: 読み込み直しても画像・入力・設定・手直しが戻る。「すべて外す」で保存も消える
-{
+if (inShard('2')) {
   const { page, errors } = await openPage({ width: 1280, height: 800 });
   await page.evaluate(() => window.__hg.loadSamples());
   await page.waitForFunction(() => window.__hg.state.works.length === 6, null, { timeout: 30000 });
@@ -704,7 +728,7 @@ async function sheet(page, file, rows) {
 }
 
 // ---- 8. PR プレビュー（/pr/<N>/）: バッジが出て、保存先が本番と分かれる
-{
+if (inShard('2')) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
   page.setDefaultTimeout(120000);
   const errors = [];
@@ -729,7 +753,7 @@ async function sheet(page, file, rows) {
 }
 
 // ---- 9. 全カテゴリの全演出: それぞれの見本の映像が描けて（真っ黒・単色にならず）、説明があり、描画命令が多すぎない
-{
+if (inShard('2')) {
   const { page, errors } = await openPage({ width: 1280, height: 800 }, '#catalog');
   const res = await page.evaluate(async () => {
     const { CATEGORIES, catalogKeys, catalogFilm, labelOf, loadWorks, TextFactory } = window.__hg.fx;
@@ -800,7 +824,7 @@ async function sheet(page, file, rows) {
 }
 
 // ---- 10. プレーヤーから戻る（スマホ）: 左上の「戻る」が常に出る／隠れている操作は最初のタップで出すだけ／ブラウザの戻るでも閉じる
-{
+if (inShard('2')) {
   // スマホ相当（タッチ）。マウスと違い、タップの前に「動かした」イベントが来ない
   const { page, errors } = await openPage({ width: 390, height: 844 }, '', { hasTouch: true, isMobile: true });
   await page.evaluate(() => window.__hg.loadSamples());
@@ -842,7 +866,7 @@ async function sheet(page, file, rows) {
 }
 
 // ---- 11. 曲: 選ぶとテンポと拍を推定して表示。BPM の手直し・倍/半分・小節の頭・タップ・保存と復元・外す
-{
+if (inShard('2')) {
   // テスト用の曲: 124 BPM・最初の拍 0.61 秒。キックは 1・3 拍目、スネアは 2・4 拍目、ハイハットは 8 分
   const sr = 44100, secs = 24, bpm = 124, offset = 0.61, beat = 60 / bpm;
   const x = new Float32Array(sr * secs);
@@ -894,14 +918,6 @@ async function sheet(page, file, rows) {
   check('song: shift downbeat', shifted === (got.grid.bar + 1) % 4, `${got.grid.bar}→${shifted}`);
   await page.click('#song-reset');
   check('song: reset to estimate', await page.evaluate((g) => JSON.stringify(window.__hg.song.cur.grid) === JSON.stringify(g) && window.__hg.song.cur.source === 'auto' && document.querySelector('#song-reset').disabled, got.grid));
-  // タップ: 推定に近い間隔なら間隔は推定のまま、位置と倍・半分だけ直る
-  const taps = await page.evaluate(async ({ beat, offset }) => {
-    const m = await import('./src/music.js');
-    const g = { bpm: 62, beat: 60 / 62, first: 0.2, bar: 0 }; // 半分・位置違いで推定を間違えた想定
-    const t = [8, 9, 10, 11, 12, 13].map((k) => offset + k * beat + (k % 2 ? 0.012 : -0.012));
-    return { fixed: m.applyTaps(g, t), raw: m.tempoFromTaps(t), few: m.applyTaps(g, t.slice(0, 3)) };
-  }, { beat, offset });
-  check('song: taps fix octave and phase', Math.abs(taps.fixed.bpm - 124) < 1e-6 && phaseErr(taps.fixed.first) < 0.005 && Math.abs(taps.raw.bpm - bpm) < 2 && taps.few === null, JSON.stringify(taps));
   // 試聴: 再生で拍の丸が動き、映像を再生すると止まる
   await page.click('#song-play');
   const playing = await page.waitForFunction(() => document.querySelector('#song-field').classList.contains('playing'), null, { timeout: 10000 }).then(() => true, () => false);
@@ -1007,15 +1023,6 @@ async function sheet(page, file, rows) {
   } else {
     console.log('(song sync playback skipped: audio playback unavailable in this browser)');
   }
-  // 書き出し用の切り出し: 曲の offset から映像の尺だけ。頭は立ち上げ、最後はフェード、足りなければ無音、2ch
-  const cut = await page.evaluate(async () => {
-    const { cutSong } = await import('./src/music.js');
-    const sr = 1000, a = new Float32Array(5000).fill(1);
-    const [l, r] = cutSong([a], sr, { offset: 1, duration: 6, fadeFrom: 3, fadeTo: 4 });
-    return { n: [l.length, r.length], start: [l[0], l[10]], before: l[2999], mid: l[3500], after: l[4001], tail: l[5999], same: l.every((v, i) => v === r[i]) };
-  });
-  check('song export: cutSong trims, ramps in, fades out, pads and makes stereo',
-    cut.n[0] === 6000 && cut.n[1] === 6000 && cut.start[0] === 0 && cut.start[1] === 1 && cut.before === 1 && Math.abs(cut.mid - 0.5) < 0.01 && cut.after === 0 && cut.tail === 0 && cut.same, JSON.stringify(cut));
   // 書き出し: 曲が入る（AAC、なければ Opus）。画面に音声の方式と権利の注意書き
   await page.click('#export');
   await page.click('#xp-fps button[data-v="30"]');
@@ -1059,16 +1066,6 @@ async function sheet(page, file, rows) {
     // 書き出し後の読み戻しの確認（音が入っていなければ画面で知らせる）が通っている
     const ai = await page.evaluate(() => ({ info: window.__hg.state.lastExport.audioInfo, hidden: document.querySelector('#xp').hidden }));
     check('song export: dialog closes and audio diagnostics are kept', ai.hidden && ai.info.chunks > 0 && ai.info.bytes > 0, JSON.stringify(ai));
-    // AAC の設定情報: 素の AudioSpecificConfig・ES_Descriptor（Apple のエンコーダーが返す形）・esds の箱ごと、から中身を取り出す
-    const asc = await page.evaluate(async () => {
-      const { aacSpecificConfig } = await import('./src/export.js');
-      const es = [0x03, 0x19, 0, 0, 0, 0x04, 0x11, 0x40, 0x15, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x05, 0x02, 0x11, 0x90, 0x06, 0x01, 0x02];
-      // iPhone 17 Pro の Safari が実際に返した形（先頭 24 バイトは実物どおり）
-      const esLong = [0x03, 0x80, 0x80, 0x80, 0x22, 0, 0, 0, 0x04, 0x80, 0x80, 0x80, 0x14, 0x40, 0x14, 0, 0x18, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x05, 0x80, 0x80, 0x80, 0x02, 0x11, 0x90, 0x06, 0x80, 0x80, 0x80, 0x01, 0x02];
-      const f = (x) => { const r = aacSpecificConfig(x && new Uint8Array(x)); return r ? [...r] : null; };
-      return [f([0x11, 0x90]), f(es), f(esLong), f([0, 0, 0, 39, 0x65, 0x73, 0x64, 0x73, 0, 0, 0, 0, ...es]), f([0x03, 0x01]), f(null), f(new Array(30).fill(0x11))];
-    });
-    check('song export: AAC config taken out of ES descriptors', JSON.stringify(asc) === JSON.stringify([[17, 144], [17, 144], [17, 144], [17, 144], null, null, null]), JSON.stringify(asc));
     // AAC を ADTS の見出し付きで出すエンコーダー向け: 見出しを取り除く（見出しがなければそのまま）
     const adts = await page.evaluate(async () => {
       const { stripAdts } = await import('./src/export.js');
@@ -1108,7 +1105,7 @@ async function sheet(page, file, rows) {
 }
 
 // ---- 12. 詳細設定からカタログへ／全画面に対応していないブラウザでは全画面ボタンを出さない
-{
+if (inShard('2')) {
   const { page, errors } = await openPage({ width: 1280, height: 800 });
   await page.evaluate(() => window.__hg.setAdvOpen(true));
   const links = await page.evaluate(() => [...document.querySelectorAll('#adv label a.cat-link')].map((a) => a.getAttribute('href')));
@@ -1137,7 +1134,7 @@ async function sheet(page, file, rows) {
 }
 
 // ---- 13. 作品の並べ替え: マウスはカードを掴んで動かす／タッチは番号札か長押し／隙間や最後尾にも落とせる／クリックは注目点エディタ
-{
+if (inShard('2')) {
   const names = (page) => page.evaluate(() => window.__hg.state.works.map((w) => w.name));
   const center = (page, sel) => page.evaluate((s) => { const r = document.querySelector(s).getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2, r: r.right, b: r.bottom }; }, sel);
   const { page, errors } = await openPage({ width: 1280, height: 900 });
@@ -1212,7 +1209,7 @@ async function sheet(page, file, rows) {
 }
 
 // ---- 6. トップ: 作例動画・ロゴ・ボタン
-for (const [name, vp, file] of [['desktop', { width: 1440, height: 900 }, 'hero-16x9'], ['phone', { width: 390, height: 844 }, 'hero-9x16']]) {
+if (inShard('2')) for (const [name, vp, file] of [['desktop', { width: 1440, height: 900 }, 'hero-16x9'], ['phone', { width: 390, height: 844 }, 'hero-9x16']]) {
   const { page, errors } = await openPage(vp);
   const hero = await page.evaluate(() => {
     const v = document.querySelector('#hero-video');
