@@ -11,6 +11,27 @@ import {
   backOut, snap, snapSoft, antic,
 } from '../ease.js';
 
+// 枠線（太さ th の 4 本の帯）。rot で中心のまわりに回す
+function outline(r, x, y, w, h, th, color, rot = 0) {
+  const c = Math.cos(rot), s = Math.sin(rot);
+  const bar = (dx, dy, bw, bh) => r.draw({ x: x + dx * c - dy * s, y: y + dx * s + dy * c, w: bw, h: bh, rot, color });
+  bar(0, -(h - th) / 2, w, th);
+  bar(0, (h - th) / 2, w, th);
+  bar(-(w - th) / 2, 0, th, h - 2 * th);
+  bar((w - th) / 2, 0, th, h - 2 * th);
+}
+
+// 四隅のトンボ（L 字）
+function corners(r, x, y, w, h, len, th, color) {
+  for (const sx of [-1, 1]) {
+    for (const sy of [-1, 1]) {
+      const cx = x + sx * w / 2, cy = y + sy * h / 2;
+      r.draw({ x: cx - sx * len / 2, y: cy - sy * th / 2, w: len, h: th, color });
+      r.draw({ x: cx - sx * th / 2, y: cy - sy * len / 2, w: th, h: len, color });
+    }
+  }
+}
+
 export const VARIANTS = {
   // 寄り（注目点）で溜めて、一気に引いて全体を見せる
   focus(S) {
@@ -436,33 +457,74 @@ export const VARIANTS = {
       text(r, t, tText, col);
     };
   },
-  // 拍ごとに注目点へ段階的に踏み込み（パンチイン）、最後に一気に引いて全体
+  // 拍ごとに注目点へ段階的に踏み込み（パンチイン）、最後に一気に引いて全体。
+  // 絵は額（パネル）の中で寄り、額も一段ずつ大きくなる。踏み込む先の画角は先にトンボの枠で示す
   punch(S) {
-    const { work, W, H, beat, D, layout, rng, points } = S;
+    const { work, W, H, beat, D, layout, points, tf, minDim } = S;
     const f = points[0];
     const img = layout.img;
-    const fit = { ix: 0.5, iy: 0.5, sx: img.x, sy: img.y, hq: img.h };
-    const close = clampFull(work, { ix: f.x, iy: f.y, sx: W / 2, sy: H / 2, hq: closeHq(work, f, W, H, rng.range(0.95, 1.2)) }, W, H);
+    const m = minDim * 0.06;
     const hits = [beat * 0.75, beat * 1.5, beat * 2.25].filter((x) => x < D - 1.8);
-    const levels = [0.45, 0.75, 1];
+    const levels = hits.map((_, k) => (k + 1) / hits.length);
     const tOut = Math.min(D - 1.4, beat * 3);
-    hits.forEach((h) => { S.event(h, 'flash', 0.18, 0.1); S.event(h, 'shake', 3, 0.12); });
+    const lead = Math.min(0.34, beat * 0.5); // 枠は拍の少し前に出る
+    // 額の大きさ: 引きの位置から、画面いっぱい（余白 m）へ近づける
+    const big = { x: W / 2, y: H / 2, w: W - 2 * m, h: H - 2 * m };
+    const panelAt = (lv) => {
+      const e = lv * 0.75;
+      return { x: lerp(img.x, big.x, e), y: lerp(img.y, big.y, e), w: lerp(img.w, big.w, e), h: lerp(img.h, big.h, e) };
+    };
+    const zMax = clamp(panelZoom(work, f, big.w, big.h, 1.4), 2.2, 3.2); // いちばん寄ったときの倍率
+    const uvAt = (lv, P) => coverUV(work, P.w, P.h, lerp(0.5, f.x, Math.min(1, lv * 1.6)), lerp(0.5, f.y, Math.min(1, lv * 1.6)), Math.exp(lerp(0, Math.log(zMax), lv)));
+    const th = Math.max(2, minDim * 0.004), len = minDim * 0.045, bd = Math.max(2, minDim * 0.006);
+    const labels = levels.map((lv) => tf.get(`×${Math.exp(lerp(0, Math.log(zMax), lv)).toFixed(1)}`, { family: 'mono', size: Math.round(minDim * 0.022), weight: 700, tracking: 0.1 }));
+    hits.forEach((h) => { S.event(h, 'flash', 0.15, 0.1); S.event(h, 'shake', 3, 0.12); });
     S.event(tOut, 'aberr', 4, 0.3);
     const text = makeTextBlock(S);
-    const cam = (t) => {
+    const level = (t) => {
       let lv = 0;
-      hits.forEach((h, k) => { lv = lerp(lv, levels[k], snap(prog(t, h - 0.12, h))); });
-      lv *= 1 - expoOut(prog(t, tOut, tOut + 0.55));
-      const c = camLerp(fit, close, lv);
-      c.hq *= 1 + 0.03 * (t / D);
-      return c;
+      hits.forEach((h, k) => { lv = lerp(lv, levels[k], snap(prog(t, h - 0.1, h))); });
+      return lv * (1 - expoOut(prog(t, tOut, tOut + 0.55)));
+    };
+    // 画角 uv2 を、いまの額 P（画角 uv）の中の矩形にする
+    const rectIn = (uv2, uv, P) => {
+      const sx = P.w / (uv[2] - uv[0]), sy = P.h / (uv[3] - uv[1]);
+      const x0 = P.x - P.w / 2 + (uv2[0] - uv[0]) * sx, x1 = P.x - P.w / 2 + (uv2[2] - uv[0]) * sx;
+      const y0 = P.y - P.h / 2 + (uv2[1] - uv[1]) * sy, y1 = P.y - P.h / 2 + (uv2[3] - uv[1]) * sy;
+      return { x: (x0 + x1) / 2, y: (y0 + y1) / 2, w: x1 - x0, h: y1 - y0 };
+    };
+    // k: 倍率の表示（引くときの入れ子の枠では出さない）
+    const frame = (r, R, a, col, k = -1) => {
+      corners(r, R.x, R.y, R.w, R.h, len, th * 1.6, withA(col.accent, a));
+      outline(r, R.x, R.y, R.w, R.h, Math.max(1, th * 0.5), withA([1, 1, 1], 0.55 * a));
+      if (k >= 0) drawText(r, labels[k], R.x - R.w / 2 + th * 3, R.y - R.h / 2 + th * 3, { color: withA(col.accent, a) });
     };
     return (r, t, col, hint) => {
-      const c = cam(t), prev = cam(t - 1 / 60);
-      drawCam(r, work, c, prev, { shutter: 0.8 });
-      const sp = Math.abs(Math.log(c.hq / prev.hq)) * 60;
-      hint.radial = clamp(sp * 0.02, 0, 0.35);
-      hint.cx = c.sx / W; hint.cy = 1 - c.sy / H;
+      const lv = level(t), lvPrev = level(t - 1 / 60);
+      const P = panelAt(lv);
+      const uv = uvAt(lv, P), uvPrev = uvAt(lvPrev, panelAt(lvPrev));
+      const drift = 1 + 0.02 * (t / D);
+      const Pd = { ...P, w: P.w * drift, h: P.h * drift };
+      // 額の縁（文字色）とアクセント色の影
+      r.draw({ x: Pd.x + bd * 2, y: Pd.y + bd * 2, w: Pd.w + bd * 2, h: Pd.h + bd * 2, color: col.accent });
+      r.draw({ x: Pd.x, y: Pd.y, w: Pd.w + bd * 2, h: Pd.h + bd * 2, color: col.ink });
+      const blur = [((uvPrev[0] + uvPrev[2]) - (uv[0] + uv[2])) * 0.25, ((uvPrev[1] + uvPrev[3]) - (uv[1] + uv[3])) * 0.25]; // 半分のシャッター
+      r.draw({ x: Pd.x, y: Pd.y, w: Pd.w, h: Pd.h, tex: work.tex, uv, blur });
+      // 次の画角の枠: 大きめに出てピタッと締まり、踏み込むと額の縁まで広がって消える
+      hits.forEach((h, k) => {
+        const a = expoOut(prog(t, h - lead, h - lead + 0.16)) * (1 - prog(t, h - 0.02, h + 0.12));
+        if (a <= 0) return;
+        const Pn = panelAt(levels[k]);
+        const R = rectIn(uvAt(levels[k], Pn), uv, Pd);
+        const g = 1 + 0.25 * (1 - backOut(prog(t, h - lead, h - lead + 0.24), 1.6));
+        frame(r, { ...R, w: R.w * g, h: R.h * g }, a, col, k);
+      });
+      // 引くときは、たどった画角を入れ子の枠で見せてから消す
+      const a = Math.min(1, prog(t, tOut + 0.15, tOut + 0.3)) * (1 - expoIn(prog(t, tOut + 0.7, tOut + 1.2)));
+      if (a > 0) levels.forEach((l) => frame(r, rectIn(uvAt(l, panelAt(l)), uv, Pd), a, col));
+      const sp = Math.abs(lv - lvPrev) * 60;
+      hint.radial = clamp(sp * 0.02, 0, 0.12);
+      hint.cx = Pd.x / W; hint.cy = 1 - Pd.y / H;
       text(r, t, tOut + 0.35, col);
     };
   },
@@ -540,32 +602,50 @@ export const VARIANTS = {
     };
   },
 
-  // 奥から回転しながら加速して飛び込み、行き過ぎてから着地
+  // 奥から飛び込む。入れ子の枠をくぐりながら加速し、行き過ぎてから着地。いちばん内側の枠が絵の縁取りになる
   dive(S) {
-    const { work, W, H, beat, D, layout, rng } = S;
+    const { work, W, H, beat, D, layout, rng, minDim } = S;
     const img = layout.img;
     const tLand = Math.min(D - 1.6, beat * 1.5);
-    const rot0 = rng.sign() * rng.range(0.4, 0.7);
+    const tilt = rng.sign() * rng.range(0.05, 0.09);
+    const NF = 5, step = 1.5; // 枠の数と、枠どうしの奥行きの比
+    const th0 = Math.max(2, minDim * 0.0035);
+    const pad = minDim * 0.018;
+    const tPulse = beat * 4.5 < D - 1 ? beat * 4.5 : -1;
     S.event(tLand, 'shake', 7, 0.25);
     S.event(tLand, 'aberr', 5, 0.3);
+    if (tPulse > 0) S.event(tPulse, 'aberr', 2, 0.2);
     const text = makeTextBlock(S);
-    const pose = (t) => {
-      const e = expoIn(prog(t, 0, tLand));
-      const settle = expoOut(prog(t, tLand, tLand + 0.4));
-      const s = t < tLand ? lerp(0.12, 1.22, e) : lerp(1.22, 1, settle) * (1 + 0.02 * prog(t, tLand + 0.4, D));
-      return { s, rot: rot0 * (1 - e), a: clamp(t / 0.15) };
+    // 絵の大きさ: 奥行きを一定の速さで詰める（log 空間で加速）→ 行き過ぎ → 着地
+    const scaleAt = (t) => {
+      if (t < tLand) return Math.exp(lerp(Math.log(0.05), Math.log(1.1), Math.pow(prog(t, 0, tLand), 2.4)));
+      return lerp(1.1, 1, expoOut(prog(t, tLand, tLand + 0.45))) * (1 + 0.02 * prog(t, tLand + 0.45, D));
     };
     return (r, t, col, hint) => {
-      const P = pose(t), Q = pose(t - 1 / 60);
-      // 残像（突っ込み中だけ）
-      if (t < tLand) {
-        for (let k = 2; k >= 1; k--) {
-          const E = pose(t - k * 0.04);
-          r.draw({ x: img.x, y: img.y, w: img.w * E.s, h: img.h * E.s, rot: E.rot, tex: work.tex, alpha: 0.25 * P.a });
-        }
+      const s = scaleAt(t), sPrev = scaleAt(t - 1 / 60);
+      const eL = expoOut(prog(t, tLand, tLand + 0.5));
+      const rot = tilt * (1 - eL);
+      const a = clamp(t / 0.12);
+      const bw = img.w + pad * 2, bh = img.h + pad * 2;
+      // 手前の枠（奥から見て絵より手前にある）: 絵と一緒に近づき、画面の外へ抜けていく
+      for (let k = NF - 1; k >= 0; k--) {
+        let m = Math.pow(step, k + 1);
+        // いちばん内側の枠は着地で絵に寄り、縁取りとして残る
+        if (k === 0) m = lerp(m, 1, backOut(prog(t, tLand - 0.05, tLand + 0.4), 1.4));
+        const sk = s * m;
+        if (sk * bw > W * 2.4) continue;
+        const fade = k === 0 ? 1 : clamp((W * 2.4 - sk * bw) / (W * 0.8));
+        const tk = th0 * Math.min(4, Math.max(1, sk));
+        const c = k % 2 ? withA(col.ink, 0.5 * fade * a) : withA(col.accent, fade * a);
+        outline(r, img.x, img.y, bw * sk, bh * sk, tk, c, rot * (1 + k * 0.6));
       }
-      r.draw({ x: img.x, y: img.y, w: img.w * P.s, h: img.h * P.s, rot: P.rot, tex: work.tex, alpha: P.a });
-      hint.radial = clamp(Math.abs(Math.log(P.s / Q.s)) * 60 * 0.03, 0, 0.4);
+      // 着地のあと、拍に合わせて枠がもう一度手前へ抜ける
+      if (tPulse > 0) {
+        const q = expoOut(prog(t, tPulse, tPulse + 0.6));
+        if (q > 0 && q < 1) outline(r, img.x, img.y, bw * s * (1 + 0.6 * q), bh * s * (1 + 0.6 * q), th0 * (1 + q), withA(col.accent, 1 - q));
+      }
+      r.draw({ x: img.x, y: img.y, w: img.w * s, h: img.h * s, rot, tex: work.tex, alpha: a });
+      hint.radial = clamp(Math.abs(Math.log(s / sPrev)) * 60 * 0.03, 0, 0.4);
       hint.cx = img.x / W; hint.cy = 1 - img.y / H;
       text(r, t, tLand + 0.35, col);
     };
@@ -635,31 +715,62 @@ export const VARIANTS = {
     };
   },
 
-  // 大きく浮いた絵が一気に叩きつけられ、衝撃波が広がる
+  // 大きく浮いた絵が、影を縮めながら一気に叩きつけられる。接地の衝撃で枠が広がり、破片が飛ぶ
   slam(S) {
     const { work, W, H, beat, D, layout, rng, minDim } = S;
     const img = layout.img;
     const tHit = Math.min(D - 1.8, beat * 0.75);
-    const rot0 = rng.sign() * rng.range(0.05, 0.12);
+    const rot0 = rng.sign() * rng.range(0.04, 0.08);
+    const lift = 0.5; // 浮いている間の拡大（高さ）
+    const shx = rng.sign() * minDim * 0.06, shy = minDim * 0.1; // 浮いているときの影のずれ
+    // 破片: 絵の縁から外へ飛ぶ短い線
+    const sparks = Array.from({ length: 16 }, () => {
+      const side = rng.int(0, 3), u = rng.range(-0.45, 0.45);
+      const ex = side < 2 ? u * img.w : (side === 2 ? -1 : 1) * img.w / 2;
+      const ey = side < 2 ? (side === 0 ? -1 : 1) * img.h / 2 : u * img.h;
+      let dx = side < 2 ? u * 0.8 : (side === 2 ? -1 : 1), dy = side < 2 ? (side === 0 ? -1 : 1) : u * 0.8;
+      const l = Math.hypot(dx, dy); dx /= l; dy /= l;
+      return { ex, ey, dx, dy, d: rng.range(0, 0.06), far: minDim * rng.range(0.08, 0.18), len: minDim * rng.range(0.04, 0.08) };
+    });
     S.event(tHit, 'shake', 10, 0.3);
-    S.event(tHit, 'flash', 0.35, 0.12);
+    S.event(tHit, 'flash', 0.3, 0.1);
     S.event(tHit, 'aberr', 5, 0.3);
     const text = makeTextBlock(S);
     return (r, t, col) => {
-      const e = expoIn(prog(t, 0, tHit));
+      const h = 1 - expoIn(prog(t, 0, tHit)); // 高さ（1 = いちばん上）
       const lt = t - tHit;
-      const s = t < tHit ? lerp(1.9, 1, e) : 1 - 0.03 * Math.exp(-lt * 12) * Math.sin(lt * 50) + 0.02 * prog(t, tHit + 0.5, D);
-      const rot = t < tHit ? rot0 * (1 - e) : 0;
-      // 衝撃波（絵の縁から広がって消える）
-      if (lt > 0) {
+      const a = clamp(t / Math.max(0.05, tHit * 0.35));
+      // 接地の瞬間につぶれて戻る
+      const q = lt >= 0 ? Math.exp(-lt * 16) * Math.cos(lt * 45) : 0;
+      const s = (1 + lift * h) * (1 + 0.02 * prog(t, tHit + 0.5, D));
+      const w = img.w * s * (1 + 0.035 * q), hh = img.h * s * (1 - 0.035 * q);
+      const rot = rot0 * h;
+      // 影: 高いほど大きくずれて薄くぼける。接地すると絵の下に締まる
+      for (let k = 0; k < 3; k++) {
+        const spread = minDim * (0.004 + 0.035 * h) * (k + 1);
+        r.draw({
+          x: img.x + shx * h + minDim * 0.006, y: img.y + shy * h + minDim * 0.012,
+          w: img.w + spread * 2, h: img.h + spread * 2, rot: rot * 0.5, color: [0, 0, 0, (0.2 - 0.1 * h) * a],
+        });
+      }
+      if (lt >= 0) {
+        // 衝撃の枠（アクセント色が先、文字色が少し遅れて）
         for (let k = 0; k < 2; k++) {
-          const q = expoOut(prog(lt, k * 0.08, k * 0.08 + 0.6));
-          if (q <= 0 || q >= 1) continue;
-          const g = 1 + 0.35 * q;
-          r.draw({ x: img.x, y: img.y, w: img.w * g, h: img.h * g, color: withA(k ? col.ink : col.accent, 0.5 * (1 - q)) });
+          const e = expoOut(prog(lt, k * 0.07, k * 0.07 + 0.55));
+          if (e >= 1) continue;
+          const g = 1 + (0.1 + 0.12 * k) * e;
+          const tk = Math.max(1.5, minDim * (k ? 0.012 : 0.028) * (1 - e));
+          outline(r, img.x, img.y, img.w * g + tk * 2, img.h * g + tk * 2, tk, k ? withA(col.ink, 0.6 * (1 - e)) : withA(col.accent, 1 - e));
+        }
+        for (const p of sparks) {
+          const e = expoOut(prog(lt, p.d, p.d + 0.45));
+          if (e <= 0 || e >= 1) continue;
+          const L = p.len * (1 - e);
+          const dist = minDim * 0.02 + p.far * e + L / 2;
+          r.draw({ x: img.x + p.ex + p.dx * dist, y: img.y + p.ey + p.dy * dist, w: L, h: Math.max(3, minDim * 0.007), rot: Math.atan2(p.dy, p.dx), color: withA(col.accent, 1 - e) });
         }
       }
-      r.draw({ x: img.x, y: img.y, w: img.w * s, h: img.h * s, rot, tex: work.tex, alpha: clamp(t / Math.max(0.05, tHit * 0.5)) });
+      r.draw({ x: img.x, y: img.y, w, h: hh, rot, tex: work.tex, alpha: a });
       text(r, t, tHit + 0.35, col);
     };
   },
@@ -696,40 +807,55 @@ export const VARIANTS = {
     };
   },
 
-  // 粗いモザイクから拍ごとに細かくなり、くっきりした絵になる
+  // 粗いマス目の絵が、注目点から広がる波に合わせて 4 つずつ細かく割れていき、最後にくっきりした絵になる
   pixel(S) {
-    const { work, W, H, beat, D, layout } = S;
+    const { work, W, H, beat, D, layout, points, minDim } = S;
     const img = layout.img;
-    const a = work.aspect;
-    const grid = (n) => ({ cols: n, rows: Math.max(1, Math.round(n / a)) });
-    // 1 コマの描画命令を抑えるため、最も細かい段でもマス目は 400 以内
-    const nMax = Math.max(8, Math.floor(Math.sqrt(400 * a)));
-    const steps = [grid(Math.max(3, Math.round(nMax / 5))), grid(Math.round(nMax / 2.5)), grid(nMax)];
-    const tS = Math.min(D - 1.4, beat * 2.4);
-    const ts = [0, tS * 0.34, tS * 0.67];
-    ts.forEach((x, i) => { if (i) S.event(x, 'aberr', 2, 0.15); });
+    const a = work.aspect, f = points[0];
+    const c0 = a >= 1 ? 4 : 3, r0 = Math.max(2, Math.round(c0 / a));
+    const LMAX = 3;
+    // 波の出る時刻と届く距離（画像の高さ単位）。いちばん細かい段は注目点のまわりだけ（描画命令を抑える）
+    const t0s = [0.15, 0.15 + beat * 0.75, 0.15 + beat * 1.5];
+    const fine = Math.min(0.45, Math.sqrt((180 * a) / (Math.PI * c0 * r0 * 64)));
+    const reach = [a + 1, a + 1, fine];
+    const tS = Math.min(D - 1.4, beat * 2.75);
+    const gap0 = Math.max(1, minDim * 0.004);
+    t0s.forEach((x) => S.event(x + 0.1, 'aberr', 1.5, 0.15));
     S.event(tS, 'flash', 0.25, 0.12);
+    S.event(tS, 'shake', 3, 0.12);
     const text = makeTextBlock(S);
+    const radius = (L, t) => reach[L] * quadOut(prog(t, t0s[L], t0s[L] + beat * 0.9));
+    const dist = (u, v) => Math.hypot((u - f.x) * a, v - f.y);
     return (r, t, col) => {
       const s = 1 + 0.02 * (t / D);
       const w = img.w * s, h = img.h * s;
       if (t >= tS) {
         r.draw({ x: img.x, y: img.y, w, h, tex: work.tex });
-      } else {
-        const k = t < ts[1] ? 0 : t < ts[2] ? 1 : 2;
-        const { cols, rows } = steps[k];
-        const tw = w / cols, th = h / rows;
-        const lod = Math.max(0, Math.log2(work.width / cols));
-        const ein = expoOut(prog(t, 0, 0.3));
-        for (let j = 0; j < rows; j++) {
-          for (let i = 0; i < cols; i++) {
-            r.draw({
-              x: img.x - w / 2 + (i + 0.5) * tw, y: img.y - h / 2 + (j + 0.5) * th, w: tw + 0.6, h: th + 0.6,
-              tex: work.tex, lod, uv: [(i + 0.5) / cols, (j + 0.5) / rows, (i + 0.5) / cols, (j + 0.5) / rows], alpha: ein,
-            });
-          }
-        }
+        text(r, t, tS + 0.3, col);
+        return;
       }
+      const gap = gap0 * (1 - snap(prog(t, tS - 0.25, tS)));
+      const cell = (L, i, j, dParent) => {
+        const cols = c0 << L, rows = r0 << L;
+        const u = (i + 0.5) / cols, v = (j + 0.5) / rows;
+        const d = dist(u, v);
+        if (L < LMAX && d < radius(L, t)) {
+          for (let k = 0; k < 4; k++) cell(L + 1, i * 2 + (k & 1), j * 2 + (k >> 1), d);
+          return;
+        }
+        // 割れた直後のマスは波の先端で光って小さく弾む
+        // （波が止まったら消す。止まった位置のマスが光ったまま残らないように）
+        const glow = L > 0 ? clamp(1 - (radius(L - 1, t) - dParent) / 0.1) * (1 - prog(t, t0s[L - 1] + beat * 0.75, t0s[L - 1] + beat * 0.9)) : 0;
+        const e0 = L === 0 ? backOut(prog(t, 0.02 + d * 0.12, 0.3 + d * 0.12), 1.4) : 1;
+        if (e0 <= 0) return;
+        const cw = w / cols, ch = h / rows, k = e0 * (1 - 0.2 * glow);
+        r.draw({
+          x: img.x - w / 2 + (i + 0.5) * cw, y: img.y - h / 2 + (j + 0.5) * ch, w: (cw - gap) * k + 0.6, h: (ch - gap) * k + 0.6,
+          tex: work.tex, lod: Math.max(0, Math.log2(work.width / cols)), uv: [u, v, u, v],
+          tint: glow > 0 ? [col.accent[0], col.accent[1], col.accent[2], 0.6 * glow] : undefined,
+        });
+      };
+      for (let j = 0; j < r0; j++) for (let i = 0; i < c0; i++) cell(0, i, j, 0);
       text(r, t, tS + 0.3, col);
     };
   },

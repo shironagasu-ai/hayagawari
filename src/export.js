@@ -44,7 +44,8 @@ const AUDIO_CANDIDATES = [
 export async function pickAudioConfig(sampleRate = 48000, numberOfChannels = 2) {
   if (typeof AudioEncoder === 'undefined' || !window.isSecureContext) return null;
   for (const c of AUDIO_CANDIDATES) {
-    const config = { codec: c.codec, sampleRate, numberOfChannels, bitrate: 192_000 };
+    // AAC は ADTS の見出しなしの素のフレームで出してもらう（MP4 にはこちらを入れる）
+    const config = { codec: c.codec, sampleRate, numberOfChannels, bitrate: 192_000, ...(c.muxCodec === 'aac' ? { aac: { format: 'aac' } } : {}) };
     try {
       const res = await AudioEncoder.isConfigSupported(config);
       if (res.supported) return { config: res.config || config, muxCodec: c.muxCodec, label: c.label };
@@ -53,11 +54,83 @@ export async function pickAudioConfig(sampleRate = 48000, numberOfChannels = 2) 
   return null;
 }
 
+// AAC の ADTS の見出し（0xFFF で始まる 7 / 9 バイト）があれば取り除く（format: 'aac' を無視するエンコーダー向け）
+export function stripAdts(chunk) {
+  const d = new Uint8Array(chunk.byteLength);
+  chunk.copyTo(d);
+  if (d.length < 7 || d[0] !== 0xff || (d[1] & 0xf6) !== 0xf0) return chunk;
+  const head = d[1] & 1 ? 7 : 9; // protection_absent = 1 なら CRC なし
+  return new EncodedAudioChunk({ type: chunk.type, timestamp: chunk.timestamp, duration: chunk.duration ?? undefined, data: d.subarray(head) });
+}
+
+const hex = (d, n = 24) => [...d.subarray(0, n)].map((b) => b.toString(16).padStart(2, '0')).join(' ') + (d.length > n ? ' …' : '');
+const bytesOf = (b) => (ArrayBuffer.isView(b) ? new Uint8Array(b.buffer, b.byteOffset, b.byteLength) : new Uint8Array(b));
+
+/**
+ * AAC の設定情報（decoderConfig.description）から AudioSpecificConfig（2〜5 バイト）を取り出す。
+ * エンコーダーによっては（Apple の AAC など）esds の中身（ES_Descriptor）や esds の箱ごとで返すので、
+ * 中の DecoderSpecificInfo（タグ 0x05）を探す。読めなければ null（→ muxer の推測値 AAC-LC を使う）
+ */
+export function aacSpecificConfig(desc) {
+  if (!desc || !desc.byteLength) return null;
+  let d = bytesOf(desc);
+  const ok = (a) => a && a.length >= 2 && a.length <= 5 && a[0] >> 3 >= 1 && a[0] >> 3 <= 31 ? new Uint8Array(a) : null;
+  // esds の箱ごと（大きさ 4 バイト + 'esds' + version/flags 4 バイト）
+  if (d.length > 12 && String.fromCharCode(d[4], d[5], d[6], d[7]) === 'esds') d = d.subarray(12);
+  if (d[0] !== 0x03) return ok(d); // 素の AudioSpecificConfig
+  // 記述子を順に読む: タグ 1 バイト + 長さ（7 ビットずつ、最大 4 バイト）
+  let i = 0;
+  const head = () => {
+    const tag = d[i++];
+    let len = 0;
+    for (let k = 0; k < 4 && i < d.length; k++) { const b = d[i++]; len = (len << 7) | (b & 0x7f); if (!(b & 0x80)) break; }
+    return { tag, len };
+  };
+  try {
+    if (head().tag !== 0x03) return null;
+    const flags = d[i + 2];
+    i += 3; // ES_ID・flags
+    if (flags & 0x80) i += 2; // dependsOn_ES_ID
+    if (flags & 0x40) i += 1 + d[i]; // URL
+    if (flags & 0x20) i += 2; // OCR_ES_Id
+    if (head().tag !== 0x04) return null;
+    i += 13; // objectType・streamType・bufferSize・maxBitrate・avgBitrate
+    const dsi = head();
+    if (dsi.tag !== 0x05) return null;
+    return ok(d.subarray(i, i + dsi.len));
+  } catch {
+    return null;
+  }
+}
+
 // AudioBuffer を丸ごとエンコードして muxer へ（0.1 秒ずつ AudioData にする）
-async function encodeAudio(buffer, aenc, muxer) {
+// info: 診断用（設定情報の中身・件数・バイト数）。書き出したあとコンソールに出す
+async function encodeAudio(buffer, aenc, muxer, info) {
   let failure = null;
+  const aac = aenc.muxCodec === 'aac';
+  Object.assign(info, { codec: aenc.config.codec, chunks: 0, bytes: 0, desc: '-', asc: '-', first: '-' });
   const encoder = new AudioEncoder({
-    output: (chunk, meta) => muxer.addAudioChunk(chunk, meta),
+    // output の中の例外はエンコーダーの外に出てこない（握りつぶされて音声が空のまま完了する）ので、拾って失敗にする
+    output: (chunk, meta) => {
+      try {
+        if (aac) {
+          chunk = stripAdts(chunk);
+          // 設定情報は AudioSpecificConfig にそろえる。読めないもの・空のものは捨てて muxer の推測値（AAC-LC）を使う
+          // （ES_Descriptor などをそのまま入れると、再生側が音声を読めない）
+          if (meta && meta.decoderConfig) {
+            const { description, ...rest } = meta.decoderConfig;
+            if (description && info.desc === '-') info.desc = hex(bytesOf(description));
+            const asc = aacSpecificConfig(description);
+            if (asc) info.asc = hex(asc);
+            meta = { ...meta, decoderConfig: asc ? { ...rest, description: asc } : rest };
+          }
+        }
+        if (!info.chunks) { const d = new Uint8Array(chunk.byteLength); chunk.copyTo(d); info.first = hex(d, 8); }
+        muxer.addAudioChunk(chunk, meta);
+        info.chunks++;
+        info.bytes += chunk.byteLength;
+      } catch (e) { failure = failure || e; }
+    },
     error: (e) => { failure = e; },
   });
   encoder.configure(aenc.config);
@@ -76,6 +149,7 @@ async function encodeAudio(buffer, aenc, muxer) {
   await encoder.flush();
   encoder.close();
   if (failure) throw failure;
+  if (!info.chunks) throw new Error('音声をエンコードできませんでした');
 }
 
 // タイマーの間引き（非表示タブで最大 1 秒）を受けずに、UI へ制御を返す
@@ -93,7 +167,8 @@ const yieldToUI = () => new Promise((r) => { yieldQueue.push(r); channel.port2.p
  * @param {object} o.enc pickEncoderConfig の結果
  * @param {(p:number, info:object)=>void} o.onProgress
  * @param {AbortSignal} o.signal
- * @param {{buffer: AudioBuffer, enc: object}} [o.audio] 音声（省略で映像のみ。v1.0.0 では使っていない。BGM の持ち込み（v1.1）で使う予定）
+ * @param {{buffer: AudioBuffer, enc: object}} [o.audio] 音声（省略で映像のみ）。持ち込んだ曲を映像の尺に切り出したもの（song.js の songAudio）。
+ *   書き出したあと audio.info に診断用の情報（設定情報・件数・バイト数）が入る（main.js がコンソールに出す）
  * @returns {Promise<Blob>}
  */
 export async function exportFrames({ canvas, renderAt, duration, fps, enc, onProgress, signal, audio }) {
@@ -107,7 +182,7 @@ export async function exportFrames({ canvas, renderAt, duration, fps, enc, onPro
     firstTimestampBehavior: 'offset',
   });
   // 音声は先に一括でエンコード（オフライン合成済みなので速い）
-  if (audio) await encodeAudio(audio.buffer, audio.enc, muxer);
+  if (audio) await encodeAudio(audio.buffer, audio.enc, muxer, (audio.info = {}));
   let failure = null;
   const encoder = new VideoEncoder({
     output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),

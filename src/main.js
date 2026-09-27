@@ -2,16 +2,19 @@
 import { Renderer } from './gl.js';
 import { TextFactory } from './text.js';
 import { analyzeImage } from './analyze.js';
-import { buildFilm } from './director.js';
+import { buildFilm, fitTempo } from './director.js';
 import { SAMPLES, pickSamples, samplesByFile, fetchSamples } from './samples.js';
 import { randomSeed, createRng } from './rng.js';
 import { initFocalEditor, openFocalEditor } from './focal-editor.js';
-import { pickEncoderConfig, exportFrames } from './export.js';
+import { pickEncoderConfig, pickAudioConfig, exportFrames } from './export.js';
 import { newKey, putImage, saveSession, loadSession, requestPersist } from './store.js';
+import { song, initSong, setSongFile, clearSong, songMeta, stopPreview, musicPlay, musicPause, musicTime, musicLevel, songAudio } from './song.js';
 import { VERSION, BUILD, PREVIEW, storageKey } from './version.js';
 import { initCatalog, catalogFilm, catalogKeys } from './catalog.js';
 import { CATEGORIES, labelOf } from './fx/labels.js';
 import { AVOID_DECOR } from './fx/rules.js';
+import { initExcludeUI, normalizeExclude, toggleExclude, isExcluded, excludeCount, excludeFromParams, excludeToParams, excludeKeys, minKeep } from './exclude.js';
+import { PACE } from './fx/themes.js';
 
 const $ = (s) => document.querySelector(s);
 const canvas = $('#gl');
@@ -37,6 +40,7 @@ const state = {
   order: 'keep',
   opener: 'auto',
   closer: 'auto',
+  exclude: {}, // 出さない演出（カテゴリ → キーの配列）
   advOpen: false, // 詳細設定アコーディオンの開閉（映像全体の設定だけ。作品ごとのタイトル・注目点は開閉に関係なく常に反映）
   film: null,
   t: 0,
@@ -60,12 +64,13 @@ function readHash() {
   if (['keep', 'shuffle'].includes(h.get('order'))) state.order = h.get('order');
   if (h.get('opener')) state.opener = h.get('opener');
   if (h.get('closer')) state.closer = h.get('closer');
+  state.exclude = excludeFromParams(h);
   return h.get('adv') === '1'; // 詳細設定を開いた状態で作った映像の URL
 }
 function writeHash() {
   // 閉じている（おまかせ）ときは詳細設定を URL に載せない。開いているときは再現用に全部載せる
   const h = new URLSearchParams(state.advOpen
-    ? { adv: '1', seed: state.seed, aspect: state.aspect, pace: state.pace, style: state.style, order: state.order, opener: state.opener, closer: state.closer }
+    ? { adv: '1', seed: state.seed, aspect: state.aspect, pace: state.pace, style: state.style, order: state.order, opener: state.opener, closer: state.closer, ...excludeToParams(state.exclude) }
     : { seed: state.seed, aspect: state.aspect });
   history.replaceState(null, '', '#' + h.toString());
 }
@@ -95,13 +100,16 @@ const ADV_NAMES = { pace: 'テンポ', style: 'スタイル', opener: 'オープ
 
 // 詳細設定は開いている間だけ反映。閉じている間はすべておまかせ（再生のたびに新しいシード）
 function changedAdv() {
-  return Object.keys(ADV_DEFAULTS).filter((k) => state[k] !== ADV_DEFAULTS[k]);
+  const changed = Object.keys(ADV_DEFAULTS).filter((k) => state[k] !== ADV_DEFAULTS[k]);
+  if (excludeCount(state.exclude)) changed.push('exclude');
+  return changed;
 }
 
 function updateAdvSummary() {
   const changed = changedAdv();
   const el = $('#adv-sum');
   const list = changed.map((k) => {
+    if (k === 'exclude') return `出さない演出 ${excludeCount(state.exclude)} 件`;
     const btn = document.querySelector(`#${k} button[data-v="${state[k]}"]`);
     return `${ADV_NAMES[k]} ${btn ? btn.textContent : state[k]}`;
   }).join('・');
@@ -123,11 +131,51 @@ function setAdvOpen(open) {
 }
 
 function resetAdv() {
+  const n = excludeCount(state.exclude);
+  if (n && !confirm(`出さない演出（${n} 件）も元に戻して、すべて出るようにしますか？`)) return;
   Object.assign(state, ADV_DEFAULTS);
   segSyncs.forEach((f) => f());
+  setExclude({});
   state.film = null;
   updateAdvSummary();
   renderWorks();
+}
+
+// ---------------------------------------------------------------- 出さない演出（除外）
+
+let exUI = null;
+let catalog = null; // 演出カタログ（下で作る）
+function setExclude(ex) {
+  state.exclude = normalizeExclude(ex);
+  state.film = null;
+  if (exUI) exUI.sync();
+  if (catalog) catalog.syncExclude();
+  updateAdvSummary();
+  scheduleSave();
+}
+// 1 つ切り替える。fromCatalog: カタログのカードから（詳細設定が閉じていたら開く＝反映する）
+function flipExclude(cat, key, fromCatalog = false) {
+  const next = toggleExclude(state.exclude, cat, key);
+  if (!next) {
+    toast(`${CATEGORIES.find((c) => c.key === cat).name}は少なくとも 1 つ残してください`);
+    return;
+  }
+  setExclude(next);
+  if (fromCatalog) {
+    const [name] = labelOf(cat, key);
+    const off = isExcluded(state.exclude, cat, key);
+    if (off && !state.advOpen) {
+      setAdvOpen(true);
+      toast(`「${name}」を出さないようにしました（詳細設定をオンにしました）`);
+    } else toast(off ? `「${name}」を出さないようにしました` : `「${name}」をまた出すようにしました`);
+  }
+}
+function setExcludeCat(cat, keys) {
+  if (excludeKeys(cat).length - keys.length < minKeep(cat)) {
+    toast(`${CATEGORIES.find((c) => c.key === cat).name}は少なくとも 1 つ残してください`);
+    return;
+  }
+  setExclude({ ...state.exclude, [cat]: keys });
 }
 
 function renderWorks() {
@@ -297,8 +345,13 @@ document.addEventListener('touchmove', (e) => { if (sorter.active && e.cancelabl
 document.addEventListener('contextmenu', (e) => { if (sorter.el && sorter.armed) e.preventDefault(); }); // 長押しのメニューを出さない
 
 function estimateDuration() {
-  const beats = { tight: 6, normal: 8, relaxed: 10 }[effectiveSettings().pace];
-  return Math.round((6 + state.works.length * beats + 8) * (60 / 124));
+  const { pace } = effectiveSettings();
+  const n = state.works.length;
+  if (song.cur) {
+    const { bpm, workBeats } = fitTempo(song.cur, 124 + PACE[pace].bpm, pace, n);
+    return Math.round((6 + n * workBeats + 8) * (60 / bpm));
+  }
+  return Math.round((6 + n * PACE[pace].beats + 8) * (60 / (124 + PACE[pace].bpm)));
 }
 
 function removeWork(id) {
@@ -345,7 +398,7 @@ function addFiles(files) {
 
 // ---------------------------------------------------------------- 作業の保存（IndexedDB・このブラウザ内のみ）
 
-const SAVED_KEYS = ['seed', 'aspect', 'pace', 'style', 'order', 'opener', 'closer'];
+const SAVED_KEYS = ['seed', 'aspect', 'pace', 'style', 'order', 'opener', 'closer', 'exclude'];
 const TEXT_FIELDS = ['artist', 'subline', 'handle'];
 const persist = { ready: false, timer: 0, pending: new Set() };
 
@@ -374,7 +427,7 @@ async function saveNow() {
     // 手で直した注目点だけ保存（自動のものは読み込み時に解析し直す）
     focal: JSON.stringify(w.focal) === JSON.stringify(w.autoFocal) ? null : w.focal,
   }));
-  try { await saveSession({ v: 1, savedAt: Date.now(), settings, works }, () => state.works.map((w) => w.key)); } catch (e) { console.warn('保存できませんでした', e); }
+  try { await saveSession({ v: 1, savedAt: Date.now(), settings, works, song: songMeta() }, () => state.works.map((w) => w.key)); } catch (e) { console.warn('保存できませんでした', e); }
 }
 
 async function restoreSession() {
@@ -388,11 +441,21 @@ async function restoreSession() {
     for (const k of SAVED_KEYS) {
       if (!st[k] || h.get(k)) continue;
       if (k === 'aspect' && !ASPECTS[st[k]]) continue;
+      if (k === 'exclude') {
+        // 詳細設定つきの URL（adv=1）や除外つきの URL なら、そちらを優先
+        if (h.get('adv') === '1' || excludeCount(excludeFromParams(h))) continue;
+        state.exclude = normalizeExclude(st.exclude);
+        continue;
+      }
       state[k] = st[k];
     }
     $('#seed').value = state.seed;
     segSyncs.forEach((f) => f());
+    if (exUI) exUI.sync();
+    if (catalog) catalog.syncExclude();
     updateAdvSummary();
+    // 曲（復元待ちの間に別の曲を選んでいたら、そちらを優先）
+    if (s.song && !song.cur) await setSongFile(s.song.blob, s.song.name, s.song);
     // 復元待ちの間にユーザーが画像を追加していたら、そちらを優先
     if (s.works.length && !state.works.length) {
       await addSources(s.works.map((w) => ({ src: w.blob, name: w.name, key: w.key, title: w.title, focal: w.focal })), { restoring: true });
@@ -418,7 +481,7 @@ function clearWorks() {
 
 // 生成に使う設定。閉じている間は詳細設定を使わず、既定（おまかせ）で作る（作品ごとのタイトル・注目点は常に使う）
 function effectiveSettings() {
-  return state.advOpen ? { ...state } : { ...state, ...ADV_DEFAULTS };
+  return state.advOpen ? { ...state } : { ...state, ...ADV_DEFAULTS, exclude: {} };
 }
 
 function build() {
@@ -436,19 +499,31 @@ function build() {
     theme: S.style === 'auto' ? null : S.style,
     opener: S.opener === 'auto' ? null : S.opener,
     closer: S.closer === 'auto' ? null : S.closer,
+    exclude: S.exclude,
     variant: state.variant || null,
+    music: song.cur ? { grid: song.cur.grid, duration: song.cur.duration } : null,
     artist: $('#artist').value.trim(), subline: $('#subline').value.trim(), handle: $('#handle').value.trim(),
   });
   state.buildMs = performance.now() - t0;
   resize();
   renderMarks();
   $('#i-style').textContent = state.film.theme;
-  $('#i-bpm').textContent = state.film.bpm;
+  $('#i-bpm').textContent = fmtBpm(state.film.bpm);
   $('#i-seed').textContent = state.seed;
   writeHash();
   scheduleSave();
   state.dirty = true;
+  if (state.playing) syncMusic(); // 再生中に作り直した（曲の位置が変わる）
   return state.film;
+}
+
+// BPM の表示（曲に合わせると小数になる）
+const fmtBpm = (b) => (Number.isInteger(b) ? String(b) : b.toFixed(1));
+
+// 曲を映像の今の時刻に合わせて鳴らす（曲がない・録画中は鳴らさない）
+function syncMusic() {
+  if (state.playing && state.film && !recorder) musicPlay(state.film.music, state.t);
+  else musicPause();
 }
 
 function play(fromStart = true) {
@@ -456,6 +531,7 @@ function play(fromStart = true) {
   if (!state.film) return;
   if (fromStart) state.t = 0;
   state.playing = true;
+  stopPreview(); // 曲の試聴は止める
   if (!body.classList.contains('playing')) {
     body.classList.add('playing');
     // スマホの「戻る」（スワイプ・ブラウザの戻る）でプレーヤーを閉じられるよう、履歴を 1 つ積む
@@ -464,11 +540,13 @@ function play(fromStart = true) {
   }
   $('#play').textContent = '❚❚';
   heroSync();
+  syncMusic();
   poke();
 }
 
 function pause() {
   state.playing = false;
+  musicPause();
   $('#play').textContent = '▶';
   state.dirty = true;
 }
@@ -496,7 +574,7 @@ function reroll() {
   $('#seed').value = state.seed;
   build();
   play(true);
-  toast(`${state.film.theme} ・ ${state.film.bpm} BPM ・ ${state.seed}`);
+  toast(`${state.film.theme} ・ ${fmtBpm(state.film.bpm)} BPM ・ ${state.seed}`);
 }
 
 // ---------------------------------------------------------------- 表示サイズ
@@ -546,11 +624,15 @@ function frame(now) {
   if (f) {
     if (state.playing) {
       state.t += dt;
+      // 曲が鳴っていれば映像の時刻を曲に従わせる（currentTime は粗く進むことがあるので、ずれが 40ms を超えたときだけ）
+      const mt = musicTime(f.music);
+      if (mt !== null && Math.abs(mt - state.t) > 0.04) state.t = Math.max(0, mt);
       if (state.t >= f.duration) {
         if (recorder) { finishRecording(); }
-        else if (state.loop) { state.t %= f.duration; }
+        else if (state.loop) { state.t %= f.duration; syncMusic(); }
         else { state.t = f.duration; pause(); }
       }
+      if (state.playing) musicLevel(f.music, state.t);
     }
     if ((state.playing || state.dirty) && !state.exporting) {
       const t0 = performance.now();
@@ -633,11 +715,12 @@ function download(blob, ext) {
 
 // ---------------------------------------------------------------- 書き出し（1コマずつ・WebCodecs）
 
-const xp = { res: 1, fps: 60, enc: null, abort: null, running: false, limit: 0 }; // limit: テスト用に書き出す秒数を制限（音声は入れない）
+const xp = { res: 1080, fps: 60, enc: null, aenc: null, abort: null, running: false, limit: 0 }; // res: 書き出す短辺のピクセル数（仮想解像度の短辺は 1080）/ limit: テスト用に書き出す秒数を制限
 
 function exportSize() {
   const [W, H] = ASPECTS[state.aspect];
-  return [W * xp.res, H * xp.res];
+  const s = xp.res / 1080;
+  return [Math.round(W * s), Math.round(H * s)];
 }
 
 async function refreshExportInfo() {
@@ -645,17 +728,27 @@ async function refreshExportInfo() {
   const info = $('#xp-info');
   info.textContent = '判定中…';
   xp.enc = await pickEncoderConfig(w, h, xp.fps);
+  const music = state.film.music && song.cur;
+  xp.aenc = xp.enc && music ? await pickAudioConfig(48000, 2) : null;
   const d = state.film.duration;
   const frames = Math.ceil(d * xp.fps);
+  // 曲の権利の注意（曲を選んでいるときだけ）
+  const rights = music ? '<br>曲の権利はご自身で確認してください。書き出した動画を公開するときは、公開・配布してよい曲を使ってください。' : '';
   if (!xp.enc) {
-    info.innerHTML = `このブラウザは1コマずつの書き出しに対応していないため、<b>リアルタイム録画</b>になります（1080p・実時間 ${fmt(d)}・タブを前面にしたまま）。`;
+    info.innerHTML = `このブラウザは1コマずつの書き出しに対応していないため、<b>リアルタイム録画</b>になります（1080p・実時間 ${fmt(d)}・タブを前面にしたまま）。`
+      + (music ? '<br><span class="warn">リアルタイム録画では曲は入りません（映像だけになります）。</span>' : '');
     return;
   }
-  const mb = (xp.enc.config.bitrate * d) / 8 / 1e6;
+  const mb = ((xp.enc.config.bitrate + (xp.aenc ? xp.aenc.config.bitrate : 0)) * d) / 8 / 1e6;
   let msg = `方式: <b>1コマずつ（${xp.enc.label} / MP4）</b> ・ ${w}×${h} ・ ${xp.fps}fps ・ ${fmt(d)}（${frames} コマ）・ 約 ${mb.toFixed(0)} MB`;
+  if (xp.aenc) msg += `<br>音声: <b>${xp.aenc.label}</b>（${escapeHtml(song.cur.name)}）`;
   if (xp.enc.muxCodec !== 'avc') msg += `<br><span class="warn">このブラウザでは H.264 が使えないため ${xp.enc.label} になります。iPhone の写真アプリや一部の SNS では再生・投稿できないことがあります（Chrome / Edge / Safari なら H.264 で書き出せます）。</span>`;
-  info.innerHTML = msg;
+  if (music && !xp.aenc) msg += '<br><span class="warn">このブラウザは音声の書き出しに対応していないため、曲は入りません（映像だけになります）。</span>';
+  else if (xp.aenc && xp.aenc.muxCodec !== 'aac') msg += `<br><span class="warn">このブラウザでは AAC が使えないため、音声は ${xp.aenc.label} になります。iPhone や一部の SNS では音が出ないことがあります（Mac や Windows の Chrome / Edge などでは AAC で書き出せます）。</span>`;
+  info.innerHTML = msg + rights;
 }
+
+const escapeHtml = (s) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 function openExport() {
   if (!state.film || recorder || xp.running) return;
@@ -677,12 +770,18 @@ async function startExport() {
   $('#xp-close').textContent = '中止';
   $('#xp-progress').hidden = false;
   body.classList.add('exporting');
-  resize(xp.res);
+  resize(xp.res / 1080);
   const f = state.film;
   const dur = xp.limit > 0 ? Math.min(xp.limit, f.duration) : f.duration;
   try {
+    // 曲: 映像の尺に切り出して、映像より先にまとめてエンコードする
+    let audio = null;
+    if (xp.aenc && f.music && song.cur) {
+      $('#xp-status').textContent = '曲を準備しています…';
+      audio = { buffer: await songAudio(f.music, dur), enc: xp.aenc };
+    }
     const blob = await exportFrames({
-      canvas, fps: xp.fps, enc: xp.enc, duration: dur, signal: xp.abort.signal,
+      canvas, fps: xp.fps, enc: xp.enc, duration: dur, signal: xp.abort.signal, audio,
       renderAt: (t) => f.render(renderer, t),
       onProgress: (p, i) => {
         $('#xp-fill').style.transform = `scaleX(${p})`;
@@ -690,7 +789,10 @@ async function startExport() {
       },
     });
     download(blob, 'mp4');
-    toast(`書き出し完了（${(blob.size / 1e6).toFixed(1)} MB・${xp.enc.label} / MP4）`);
+    toast(`書き出し完了（${(blob.size / 1e6).toFixed(1)} MB・${xp.enc.label}${audio ? ' + ' + xp.aenc.label : ''} / MP4）`);
+    // 音声の診断（設定情報・件数）はコンソールにだけ出す。書き出した MP4 を読み戻して確かめることはしない
+    // （Safari の decodeAudioData は映像入りの MP4 から音声を読めず、音が入っていても失敗するため）
+    if (audio) { state.lastExport.audioInfo = audio.info; console.info('書き出した音声', audio.info); }
     $('#xp').hidden = true;
   } catch (e) {
     if (e.name === 'AbortError') toast('書き出しを中止しました');
@@ -733,6 +835,7 @@ function wake() {
 function seekTo(clientX) {
   const r = $('#seek').getBoundingClientRect();
   state.t = Math.max(0, Math.min(1, (clientX - r.left) / r.width)) * state.film.duration;
+  if (state.playing) syncMusic();
   poke();
 }
 
@@ -743,6 +846,7 @@ function jump(dir) {
   let i = starts.findIndex((s, k) => state.t >= s && (k === starts.length - 1 || state.t < starts[k + 1]));
   i = Math.max(0, Math.min(starts.length - 1, i + dir));
   state.t = starts[i];
+  if (state.playing) syncMusic();
   poke();
 }
 
@@ -763,7 +867,9 @@ bindSeg('#style', 'style');
 bindSeg('#order', 'order');
 bindSeg('#opener', 'opener');
 bindSeg('#closer', 'closer');
+exUI = initExcludeUI({ el: $('#exclude'), get: () => state.exclude, toggle: (cat, key) => flipExclude(cat, key), set: setExcludeCat });
 initFocalEditor();
+initSong({ onChange: () => { state.film = null; scheduleSave(); renderWorks(); }, toast });
 $('#adv').addEventListener('toggle', () => { if ($('#adv').open !== state.advOpen) setAdvOpen($('#adv').open); });
 $('#adv-reset').addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); resetAdv(); }); // summary 内なので開閉させない
 $('#pace').addEventListener('click', renderWorks);
@@ -1000,8 +1106,12 @@ function loadCatalogWorks() {
   }
   return catalogWorks;
 }
-const catalog = initCatalog({
+catalog = initCatalog({
   renderer,
+  exclude: {
+    has: (cat, key) => isExcluded(state.exclude, cat, key),
+    toggle: (cat, key) => flipExclude(cat, key, true),
+  },
   loadWorks: loadCatalogWorks,
   restore: () => resize(),
   play: async (cat, key) => {
@@ -1033,5 +1143,6 @@ window.__hg = {
   // GPU に溜まった描画命令を最後まで実行させる（1px 読み出しで同期。gl.finish は Chrome では待たない）
   sync: () => { const gl = renderer.gl; const px = new Uint8Array(4); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); return px[3]; },
   setSeed: (s) => { state.seed = s; $('#seed').value = s; state.film = null; },
-  setOpt: (k, v) => { state[k] = v; state.film = null; segSyncs.forEach((f) => f()); updateAdvSummary(); },
+  song, setSongFile, clearSong, musicTime,
+  setOpt: (k, v) => { if (k === 'exclude') return setExclude(v); state[k] = v; state.film = null; segSyncs.forEach((f) => f()); updateAdvSummary(); },
 };

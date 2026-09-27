@@ -55,6 +55,8 @@ jobs:
           google-chrome --version
           echo "CHROMIUM_PATH=$(command -v google-chrome)" >> "$GITHUB_ENV"
           echo "EXPECT_H264=1" >> "$GITHUB_ENV"
+          # 比率違いの見本シート（目で見るための画像）は Chromium 側だけで作る（時間短縮）
+          echo "E2E_ASPECT_SHEETS=0" >> "$GITHUB_ENV"
       - run: npm test
       - name: Upload screenshots and exported videos
         if: always()

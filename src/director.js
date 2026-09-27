@@ -22,16 +22,45 @@ import { EXIT_DUR, ENTRY_DUR, transitionHint, drawBars, TRANSITION_KEYS, GAP_TRA
 import { OPENERS } from './fx/openers.js';
 import { CLOSERS } from './fx/closers.js';
 import { AVOID_DECOR } from './fx/rules.js';
+import { PALETTES } from './fx/palettes.js';
+import { nextDownbeat } from './music.js';
 
 export { THEMES, STYLE_KEYS, VARIANT_KEYS };
+
+// ---------------------------------------------------------------- 除外（出さない演出）
+
+// opts.exclude = { style, opener, closer, variant, transition, decor, palette: [キー, ...] }
+// 外した演出は抽選に出さない（明示的に選んだもの＝opts.theme / opener / closer などは除外より優先）。
+// 除外がないときは今までと同じ回数だけ乱数を引く（同じシードで同じ映像になる）
+function banSets(ex) {
+  const out = {};
+  for (const cat of ['style', 'opener', 'closer', 'variant', 'transition', 'decor', 'palette']) out[cat] = new Set((ex && ex[cat]) || []);
+  return out;
+}
+// 外していないものから一様に選ぶ。全部外れていたら外す前の一覧から
+function pickAllowed(rng, keys, ban) {
+  const ok = keys.filter((k) => !ban.has(k));
+  return rng.pick(ok.length ? ok : keys);
+}
+// 重み付きで、外していないものから選ぶ。avoid（直前と同じ・相性の悪いもの）は候補がなければ緩めるが、ban は必ず守る。
+// 重みのあるものが全部外れていたら、外していない残り（all）から同じ重みで選ぶ。何も残らなければ null
+function weightedAllowed(rng, weights, avoid, ban, all) {
+  if (!ban.size) return rng.weighted(weights, avoid);
+  const w = {};
+  for (const k in weights) if (!ban.has(k)) w[k] = weights[k];
+  if (!Object.values(w).some((v) => v > 0)) for (const k of all) if (!ban.has(k)) w[k] = 1;
+  if (!Object.keys(w).length) return null;
+  return rng.weighted(w, avoid);
+}
 
 // ---------------------------------------------------------------- 本体
 
 export function buildFilm(opts) {
   const { works, seed, W, H, tf, pace = 'normal', artist = '', subline = '', handle = '' } = opts;
   const rng = createRng(`${seed}|${works.length}|${W}x${H}|${pace}`);
+  const ban = banSets(opts.exclude);
   const mixMode = opts.theme === 'MIX';
-  const baseName = !mixMode && opts.theme && THEMES[opts.theme] ? opts.theme : rng.pick(Object.keys(THEMES));
+  const baseName = !mixMode && opts.theme && THEMES[opts.theme] ? opts.theme : pickAllowed(rng, Object.keys(THEMES), ban.style);
   const themeName = mixMode ? 'MIX' : baseName;
   const theme = THEMES[baseName]; // オープニング/エンディング/HUD/BPM のスタイル
   // 作品ごとのスタイル。MIX では1枚ずつ抽選（直前と同じものは避ける）
@@ -39,12 +68,19 @@ export function buildFilm(opts) {
   for (let i = 0; i < works.length; i++) {
     if (!mixMode) { workThemeNames.push(baseName); continue; }
     const keys = Object.keys(THEMES).filter((k) => k !== workThemeNames[i - 1]);
-    workThemeNames.push(rng.pick(keys));
+    const ok = keys.filter((k) => !ban.style.has(k));
+    // 残りが直前と同じスタイルだけなら、続けて使う
+    workThemeNames.push(ok.length ? rng.pick(ok) : pickAllowed(rng, Object.keys(THEMES), ban.style));
   }
   const workThemes = workThemeNames.map((k) => THEMES[k]);
   const P = PACE[pace] || PACE.normal;
-  const bpm = Math.round(rng.range(theme.bpm[0], theme.bpm[1]) + P.bpm);
+  // テンポ: スタイルの範囲から抽選。曲があるときは曲の BPM（倍・半分のうち抽選したテンポに近い方）にする
+  // （曲があっても抽選はする。乱数の並びを曲の有無で変えないため）
+  const styleBpm = Math.round(rng.range(theme.bpm[0], theme.bpm[1]) + P.bpm);
+  const tempo = opts.music ? fitTempo(opts.music, styleBpm, pace, works.length) : null;
+  const bpm = tempo ? tempo.bpm : styleBpm;
   const beat = 60 / bpm;
+  const workBeats = tempo ? tempo.workBeats : P.beats;
   const minDim = Math.min(W, H);
   const events = [];
   const segments = [];
@@ -52,8 +88,9 @@ export function buildFilm(opts) {
   // opts.palette / opts.transition / opts.decor はカタログ・テスト用（抽選は通常どおり行い、結果だけ差し替える）
   // 配色はスタイルの重み（palettes）で選ぶ。同じスタイルの作品は同じ配色の傾向にそろえる
   const palPick = {};
-  const paletteFor = (name) => (palPick[name] ??= rng.weighted(THEMES[name].palettes || { [THEMES[name].bg]: 1 }));
-  const workColors = works.map((w, i) => colorsFor(w, workThemes[i], opts.palette || paletteFor(workThemeNames[i])));
+  const paletteFor = (name) => (palPick[name] ??= weightedAllowed(rng, THEMES[name].palettes || { [THEMES[name].bg]: 1 }, [], ban.palette, Object.keys(PALETTES)) || THEMES[name].bg);
+  const workPalettes = workThemeNames.map((name) => opts.palette || paletteFor(name));
+  const workColors = works.map((w, i) => colorsFor(w, workThemes[i], workPalettes[i]));
   const globalCol = workColors[0] || colorsFor({ roles: { dominant: [0.1, 0.1, 0.1], accent: [1, 0.3, 0.3] } }, theme, opts.palette || paletteFor(baseName));
 
   // ---- トランジション列（境界ごと）
@@ -63,8 +100,13 @@ export function buildFilm(opts) {
   for (let i = 0; i < nBound; i++) {
     // 境界 i は「直前のセグメント」のスタイルの重みで抽選（0 はオープニング＝ベース）
     const trTheme = i === 0 ? theme : workThemes[i - 1];
-    let type = rng.weighted(trTheme.trans, prevType ? [prevType] : []);
-    if (i === nBound - 1 && type === 'glitch') type = 'bars';
+    let type = weightedAllowed(rng, trTheme.trans, prevType ? [prevType] : [], ban.transition, TRANSITION_KEYS) || rng.weighted(trTheme.trans);
+    if (i === nBound - 1 && type === 'glitch') {
+      // 最後の境界にグリッチは使わない（カラーバーに）。カラーバーを外していたら、グリッチ以外から選び直す
+      type = ban.transition.has('bars')
+        ? weightedAllowed(rng, trTheme.trans, [prevType], new Set([...ban.transition, 'glitch']), TRANSITION_KEYS) || 'bars'
+        : 'bars';
+    }
     if (TRANSITION_KEYS.includes(opts.transition)) type = opts.transition;
     const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
     const d = rng.chance(0.7) ? dirs[rng.int(0, 1)] : dirs[rng.int(2, 3)];
@@ -83,8 +125,8 @@ export function buildFilm(opts) {
   const C = {
     works, W, H, beat, rng: rng.fork('bookends'), tf, theme, minDim, artist, subline, handle, ev: null,
   };
-  const openerKey = OPENERS[opts.opener] ? opts.opener : rng.pick(Object.keys(OPENERS));
-  const closerKey = CLOSERS[opts.closer] ? opts.closer : rng.pick(Object.keys(CLOSERS));
+  const openerKey = OPENERS[opts.opener] ? opts.opener : pickAllowed(rng, Object.keys(OPENERS), ban.opener);
+  const closerKey = CLOSERS[opts.closer] ? opts.closer : pickAllowed(rng, Object.keys(CLOSERS), ban.closer);
   {
     const start = cursor;
     const O = OPENERS[openerKey]({ ...C, ev: (t, kind, amt, dur, color) => addEvent(start + t, kind, amt, dur, color) });
@@ -96,12 +138,13 @@ export function buildFilm(opts) {
   const varKeys = [];
   const decorKeys = [];
   works.forEach((work, idx) => {
-    const D = beat * P.beats;
+    const D = beat * workBeats;
     const start = cursor;
     const srng = rng.fork('work' + idx);
     // opts.variant はテスト・デバッグ用（全作品を指定の振付に固定）
     const wtheme = workThemes[idx];
-    const vkey = VARIANTS[opts.variant] ? (srng.next(), opts.variant) : srng.weighted(wtheme.variants, varKeys.slice(-1));
+    const vkey = VARIANTS[opts.variant] ? (srng.next(), opts.variant)
+      : weightedAllowed(srng, wtheme.variants, varKeys.slice(-1), ban.variant, Object.keys(VARIANTS)) || srng.weighted(wtheme.variants, varKeys.slice(-1));
     varKeys.push(vkey);
     const side = srng.pick(['left', 'right']);
     const layout = layoutFor(work, W, H, idx % 2 ? (side === 'left' ? 'right' : 'left') : side);
@@ -111,14 +154,21 @@ export function buildFilm(opts) {
       event: (t, kind, amt, dur, color) => addEvent(start + t, kind, amt, dur, color),
     };
     const avoid = AVOID_DECOR[vkey] || []; // 見せ方と合わない飾りは選ばない
-    const dkeys = [srng.weighted(wtheme.decor, [...decorKeys.slice(-1), ...avoid])];
-    if (srng.chance(0.35)) dkeys.push(srng.weighted(wtheme.decor, [...dkeys, ...avoid]));
+    // 飾りは全部外してもよい（外すと飾りなし）
+    const allDecor = Object.keys(DECORS);
+    const dkeys = [weightedAllowed(srng, wtheme.decor, [...decorKeys.slice(-1), ...avoid], ban.decor, allDecor)];
+    if (srng.chance(0.35)) {
+      // 2 つめは 1 つめと別のもの（外していない飾りが 1 つしかなければ 2 つめはなし）
+      const second = weightedAllowed(srng, wtheme.decor, [...dkeys, ...avoid], ban.decor, allDecor);
+      if (!ban.decor.size || second !== dkeys[0]) dkeys.push(second);
+    }
     decorKeys.push(dkeys[0]);
+    for (let k = dkeys.length - 1; k >= 0; k--) if (!dkeys[k]) dkeys.splice(k, 1);
     if (DECORS[opts.decor]) dkeys.splice(0, dkeys.length, opts.decor);
     const decors = dkeys.map((k) => DECORS[k](S));
     const body = VARIANTS[vkey](S);
     segments.push({
-      kind: 'work', idx, variant: vkey, decor: dkeys, theme: workThemeNames[idx], start, dur: D, col: workColors[idx], work, layout,
+      kind: 'work', idx, variant: vkey, decor: dkeys, palette: workPalettes[idx], theme: workThemeNames[idx], start, dur: D, col: workColors[idx], work, layout,
       inT: transitions[idx], outT: transitions[idx + 1],
       draw(r, t, col, hint) {
         for (const d of decors) d(r, t, D, col);
@@ -137,6 +187,8 @@ export function buildFilm(opts) {
   }
 
   const duration = cursor;
+  // 曲: 映像の t 秒 = 曲の offset + t 秒。オープニングの終わり（最初の作品）が曲の小節の頭に来る。最後の 2 拍で音を消す
+  const music = tempo ? { offset: nextDownbeat(opts.music.grid, segments[0].dur) - segments[0].dur, fadeFrom: duration - beat * 2, fadeTo: duration } : null;
 
   // ---- 境界ごとのトランジション固有パラメータ（注目点・演出用の色・イベント）
   for (let i = 0; i < segments.length - 1; i++) {
@@ -263,9 +315,43 @@ export function buildFilm(opts) {
   function dispose() { /* テキストは TextFactory 側で一括破棄 */ }
 
   return {
-    duration, bpm, beat, theme: themeName, baseTheme: baseName, workThemes: workThemeNames, opener: openerKey, closer: closerKey, segments, events, render, dispose,
-    summary: segments.map((s) => ({ kind: s.kind, theme: s.theme, start: s.start, dur: s.dur, variant: s.variant, decor: s.decor, out: s.outT && s.outT.type })),
+    duration, bpm, beat, music, theme: themeName, baseTheme: baseName, workThemes: workThemeNames, opener: openerKey, closer: closerKey, segments, events, render, dispose,
+    summary: segments.map((s) => ({ kind: s.kind, theme: s.theme, start: s.start, dur: s.dur, variant: s.variant, decor: s.decor, palette: s.palette, out: s.outT && s.outT.type })),
   };
+}
+
+// ---------------------------------------------------------------- 曲に合わせる
+
+const OPENER_BEATS = 6, CLOSER_BEATS = 8; // オープニング・エンディングの拍数（openers.js / closers.js）
+const MIN_WORK_SEC = 2.4; // 作品 1 枚の最短の秒数（見せ方の動きが収まる長さ。曲がないときの最短とほぼ同じ）
+
+/**
+ * 曲に合わせたテンポと作品あたりの拍数
+ * @param {{ grid: { bpm: number, beat: number, first: number, bar: number }, duration: number }} music 曲の拍の格子と長さ（秒）
+ * @param {number} styleBpm スタイルから抽選したテンポ
+ * @param {string} pace 'tight' | 'normal' | 'relaxed'
+ * @param {number} n 作品の数
+ * @returns {{ bpm: number, workBeats: number }}
+ */
+export function fitTempo(music, styleBpm, pace, n) {
+  const { grid } = music;
+  // 曲の BPM の倍・半分のうち、スタイルのテンポにいちばん近いもの
+  const dist = (m) => Math.abs(Math.log2((grid.bpm * m) / styleBpm));
+  const m = [1, 0.5, 2].reduce((a, b) => (dist(b) < dist(a) - 1e-9 ? b : a));
+  const bpm = grid.bpm * m, beat = 60 / bpm;
+  // 作品の切り替えが曲の小節の頭に来るよう、作品の拍数は小節（映像の拍で 4m 拍）の倍数にする。
+  // 「きびきび」だけは半小節きざみも使う（小節単位だと「ふつう」と同じ長さになりやすいため）
+  const unit = 4 * m * (pace === 'tight' ? 0.5 : 1);
+  const P = PACE[pace] || PACE.normal;
+  const target = (P.beats * 60) / styleBpm; // 曲がないときの 1 枚の秒数
+  const minK = Math.max(1, Math.ceil(MIN_WORK_SEC / (unit * beat) - 1e-9));
+  let k = Math.max(minK, Math.round(target / (unit * beat)));
+  const open = OPENER_BEATS * beat;
+  const offset = nextDownbeat(grid, open) - open;
+  // 曲が映像より短ければ、作品の拍数を減らして曲の中に収める（最短でも収まらなければそのまま。曲が終わったあとは無音）
+  const fits = (k) => offset + (OPENER_BEATS + n * k * unit + CLOSER_BEATS) * beat <= music.duration + 1e-6;
+  while (k > minK && !fits(k)) k--;
+  return { bpm, workBeats: k * unit };
 }
 
 // 常駐 HUD: 作家名・通し番号・進行ティック

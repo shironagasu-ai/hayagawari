@@ -208,8 +208,8 @@ async function sheet(page, file, rows) {
   await sheet(page, 'sheet-variants.png', vKeys.map((k) => ({ key: 'variant', value: k, seg: 1, times: T })));
   const picked = await page.evaluate(() => { const f = window.__hg.state.film; return [f.opener, f.closer, f.segments[1].variant]; });
   check('opener/closer/variant overrides applied', picked[0] === opKeys[opKeys.length - 1] && picked[1] === clKeys[clKeys.length - 1] && picked[2] === vKeys[vKeys.length - 1], picked.join(','));
-  // 縦長（9:16・3:4）と 4:3 でも崩れないか目視確認用
-  for (const asp of ['9:16', '4:3', '3:4']) {
+  // 縦長（9:16・3:4）と 4:3 でも崩れないか目視確認用。E2E_ASPECT_SHEETS=0 で省く（CI の Chrome 側。描けるかどうかは 9 の全演出チェックで見ている）
+  for (const asp of process.env.E2E_ASPECT_SHEETS === '0' ? [] : ['9:16', '4:3', '3:4']) {
     const tag = asp.replace(':', 'x');
     await page.evaluate((a) => { window.__hg.setOpt('aspect', a); window.__hg.resize(); }, asp);
     await sheet(page, `sheet-openers-${tag}.png`, opKeys.map((k) => ({ key: 'opener', value: k, seg: 0, times: T })));
@@ -394,6 +394,132 @@ async function sheet(page, file, rows) {
   await page.close();
 }
 
+// ---- 3b. 出さない演出: 外した演出は抽選に出ない／1 つは残す／URL・保存・カタログのボタン
+{
+  const { page, errors } = await openPage({ width: 1280, height: 800 }, '#adv=1&seed=EX-0001');
+  await page.evaluate(() => window.__hg.loadSamples());
+  await page.waitForFunction(() => window.__hg.state.works.length === 6, null, { timeout: 30000 });
+  // 除外なしなら、除外の指定がない（空の）ときと同じ映像
+  const same = await page.evaluate(() => {
+    const out = [];
+    for (let i = 0; i < 20; i++) {
+      window.__hg.setSeed('EXS' + i); window.__hg.build();
+      const a = JSON.stringify(window.__hg.state.film.summary) + window.__hg.state.film.theme;
+      window.__hg.setOpt('exclude', { variant: [] }); window.__hg.build();
+      out.push(a === JSON.stringify(window.__hg.state.film.summary) + window.__hg.state.film.theme);
+      window.__hg.setOpt('exclude', {});
+    }
+    return out.every(Boolean);
+  });
+  check('exclude: empty exclusion keeps the same film', same);
+  // 多めに外して 60 通りのシードで作り、外したものが 1 回も出ない
+  const EX = {
+    style: ['NOIR', 'POP', 'GLITCH'], opener: ['montage', 'type', 'boot'], closer: ['grid', 'stack'],
+    variant: ['focus', 'cuts', 'pixel', 'card', 'cinema'], transition: ['whip', 'cut', 'bars', 'zoom'],
+    decor: ['number', 'grid', 'blur', 'dots'], palette: ['dark', 'light', 'accent'],
+  };
+  const hits = await page.evaluate((EX) => {
+    window.__hg.setOpt('exclude', EX);
+    const bad = [];
+    let decors = 0;
+    for (const style of ['auto', 'MIX']) {
+      window.__hg.setOpt('style', style);
+      for (let i = 0; i < 30; i++) {
+        window.__hg.setSeed('EXC' + i); window.__hg.build();
+        const f = window.__hg.state.film;
+        if (EX.opener.includes(f.opener)) bad.push('opener:' + f.opener);
+        if (EX.closer.includes(f.closer)) bad.push('closer:' + f.closer);
+        if (style === 'auto' && EX.style.includes(f.theme)) bad.push('style:' + f.theme);
+        for (const t of f.workThemes) if (EX.style.includes(t)) bad.push('work style:' + t);
+        for (const s of f.summary) {
+          if (s.out && s.kind !== 'closer' && EX.transition.includes(s.out)) bad.push('transition:' + s.out); // エンディングの後（ループの頭）は常にカット
+          if (s.kind !== 'work') continue;
+          if (EX.variant.includes(s.variant)) bad.push('variant:' + s.variant);
+          if (EX.palette.includes(s.palette)) bad.push('palette:' + s.palette);
+          for (const d of s.decor) { decors++; if (EX.decor.includes(d)) bad.push('decor:' + d); }
+        }
+      }
+    }
+    return { bad, decors };
+  }, EX);
+  check('exclude: excluded effects never picked', hits.bad.length === 0 && hits.decors > 0, hits.bad.slice(0, 8).join(', '));
+  // 明示的に選んだものは除外より優先
+  const explicit = await page.evaluate(() => {
+    window.__hg.setOpt('style', 'NOIR'); window.__hg.setOpt('opener', 'montage'); window.__hg.build();
+    const f = window.__hg.state.film;
+    window.__hg.setOpt('style', 'auto'); window.__hg.setOpt('opener', 'auto');
+    return [f.theme, f.opener];
+  });
+  check('exclude: explicit choice wins over exclusion', explicit.join() === 'NOIR,montage', explicit.join());
+  // 背景の飾りは全部外せる（飾りなし）。見せ方・切り替えを 1 つだけ残すとそれだけになる
+  const only = await page.evaluate(() => {
+    const { catalogKeys } = window.__hg.fx;
+    window.__hg.setOpt('exclude', {
+      decor: catalogKeys('decor'),
+      variant: catalogKeys('variant').filter((k) => k !== 'slam'),
+      transition: catalogKeys('transition').filter((k) => k !== 'glitch'),
+    });
+    const v = new Set(), tr = new Set(), d = new Set();
+    for (let i = 0; i < 10; i++) {
+      window.__hg.setSeed('ONLY' + i); window.__hg.build();
+      const f = window.__hg.state.film;
+      for (const s of f.summary) { if (s.kind === 'work') { v.add(s.variant); s.decor.forEach((x) => d.add(x)); } if (s.out && s.kind !== 'closer') tr.add(s.out); }
+      for (let k = 0; k < 20; k++) window.__hg.renderAt((k / 20) * f.duration);
+    }
+    return { v: [...v], tr: [...tr], d: [...d] };
+  });
+  // 最後の境界だけはグリッチを使わない（残りがグリッチだけならカラーバー）
+  check('exclude: whitelist of one variant / transition, no decor', only.v.join() === 'slam' && only.tr.every((t) => t === 'glitch' || t === 'bars') && only.d.length === 0, JSON.stringify(only));
+  // UI: 1 つは残す（最後の 1 つは外せない）
+  await page.evaluate(() => { window.__hg.setOpt('exclude', { opener: window.__hg.fx.catalogKeys('opener').slice(1) }); document.querySelector('.ex-cat[data-cat="opener"]').open = true; });
+  const firstOp = await page.evaluate(() => window.__hg.fx.catalogKeys('opener')[0]);
+  await page.click(`.ex-cat[data-cat="opener"] .ex-chips button[data-key="${firstOp}"]`);
+  check('exclude: last one cannot be excluded', await page.evaluate((k) => !window.__hg.state.exclude.opener.includes(k), firstOp) && (await page.textContent('#toast')).includes('1 つ残して'));
+  // UI: ボタンで外す → 要約・URL に載る → 反転で「それだけ出す」
+  await page.evaluate(() => window.__hg.setOpt('exclude', {}));
+  await page.evaluate(() => { document.querySelector('.ex-cat[data-cat="variant"]').open = true; });
+  await page.click('.ex-cat[data-cat="variant"] .ex-chips button[data-key="pixel"]');
+  await page.click('.ex-cat[data-cat="variant"] .ex-chips button[data-key="scan"]');
+  const ui = await page.evaluate(() => ({
+    ex: window.__hg.state.exclude, sum: document.querySelector('#adv-sum').textContent,
+    count: document.querySelector('.ex-cat[data-cat="variant"] .ex-count').textContent,
+    off: [...document.querySelectorAll('.ex-cat[data-cat="variant"] button.off')].map((b) => b.dataset.key),
+  }));
+  check('exclude: chips toggle and summary counts', JSON.stringify(ui.ex) === '{"variant":["scan","pixel"]}' && ui.sum.includes('出さない演出 2 件') && ui.count.includes('2 件') && ui.off.join() === 'scan,pixel', JSON.stringify(ui));
+  await page.screenshot({ path: join(outDir, 'exclude-settings.png'), fullPage: true });
+  await page.click('#go');
+  check('exclude: URL carries exclusions', await page.evaluate(() => decodeURIComponent(location.hash).includes('x-variant=scan.pixel')));
+  const url = await page.evaluate(() => location.hash);
+  await page.evaluate(() => window.__hg.toEditor());
+  await page.click('.ex-cat[data-cat="variant"] .ex-inv');
+  check('exclude: invert keeps only the chosen ones', await page.evaluate(() => { const v = window.__hg.state.exclude.variant; return v.length === window.__hg.fx.catalogKeys('variant').length - 2 && !v.includes('scan') && !v.includes('pixel'); }));
+  // 閉じている間は除外も使わない（すべておまかせ）
+  const closed = await page.evaluate(() => {
+    window.__hg.setAdvOpen(false);
+    window.__hg.setOpt('exclude', { variant: window.__hg.fx.catalogKeys('variant').filter((k) => k !== 'slam') });
+    const v = new Set();
+    for (let i = 0; i < 5; i++) { window.__hg.setSeed('CL' + i); window.__hg.build(); window.__hg.state.film.summary.forEach((s) => s.variant && s.kind === 'work' && v.add(s.variant)); }
+    return v.size;
+  });
+  check('exclude: not applied while settings are closed', closed > 1, `variants=${closed}`);
+  // 共有 URL で開くと除外も再現される
+  const p2 = await openPage({ width: 1280, height: 800 }, url);
+  check('exclude: restored from shared URL', await p2.page.evaluate(() => JSON.stringify(window.__hg.state.exclude)) === '{"variant":["scan","pixel"]}');
+  await p2.page.close();
+  // カタログのカードの「出さない」: 押すと外れる（詳細設定が閉じていれば開く）、もう一度で戻る
+  await page.evaluate(() => { window.__hg.setOpt('exclude', {}); location.hash = 'catalog=decor'; });
+  await page.waitForSelector('.cat-card[data-key="ticker"] .cat-ex:not([hidden])');
+  await page.click('.cat-card[data-key="ticker"] .cat-ex');
+  const cat1 = await page.evaluate(() => ({ ex: window.__hg.state.exclude, adv: window.__hg.state.advOpen, off: document.querySelector('.cat-card[data-key="ticker"]').classList.contains('off'), chip: document.querySelector('.ex-cat[data-cat="decor"] button[data-key="ticker"]').classList.contains('off') }));
+  check('exclude: catalog button excludes and turns settings on', JSON.stringify(cat1.ex) === '{"decor":["ticker"]}' && cat1.adv && cat1.off && cat1.chip, JSON.stringify(cat1));
+  await page.screenshot({ path: join(outDir, 'exclude-catalog.png') });
+  await page.click('.cat-card[data-key="ticker"] .cat-ex');
+  check('exclude: catalog button toggles back', await page.evaluate(() => JSON.stringify(window.__hg.state.exclude) === '{}' && !document.querySelector('.cat-card[data-key="ticker"]').classList.contains('off')));
+  check('exclude: MIX has no exclude button', await page.evaluate(() => { location.hash = 'catalog=style'; return new Promise((r) => setTimeout(() => r(document.querySelector('.cat-card[data-key="MIX"] .cat-ex').hidden), 100)); }));
+  check('no page errors (exclude)', errors.length === 0, errors.join('\n'));
+  await page.close();
+}
+
 // ---- 4. 書き出し（1コマずつ・WebCodecs）: 実際に MP4 を作り、<video> で再生できるか確認
 {
   // adv=1: 詳細設定を開いた状態＝指定のシードを使う（閉じているとシードが毎回ランダムになり結果がぶれる）
@@ -409,8 +535,16 @@ async function sheet(page, file, rows) {
   const info = await page.textContent('#xp-info');
   console.log('export info:', info.replace(/\s+/g, ' ').slice(0, 160));
   check('frame export available', info.includes('1コマずつ'), info);
+  // 解像度: 540p・720p・1080p・4K（16:9 ではそれぞれ 960×540 / 1280×720 / 1920×1080 / 3840×2160）
+  const sizes = [];
+  for (const v of ['540', '720', '2160', '1080']) {
+    await page.click(`#xp-res button[data-v="${v}"]`);
+    await page.waitForFunction(() => !document.querySelector('#xp-info').textContent.includes('判定中'));
+    sizes.push(((await page.textContent('#xp-info')).match(/(\d+)×(\d+)/) || [])[0]);
+  }
+  check('export sizes 540p / 720p / 4K / 1080p', JSON.stringify(sizes) === JSON.stringify(['960×540', '1280×720', '3840×2160', '1920×1080']), JSON.stringify(sizes));
   const noSoundUi = await page.evaluate(() => !document.querySelector('#snd') && !document.querySelector('#xp-snd'));
-  check('no sound controls (v1.0.0 has no sound)', !info.includes('音声') && noSoundUi, info);
+  check('no audio line or sound controls without a song', !info.includes('音声') && noSoundUi, info);
   const vcodec = (info.match(/1コマずつ（(\S+) \/ MP4）/) || [])[1];
   console.log(`codecs: video=${vcodec}`);
   // CI の Google Chrome では H.264 で書き出せるはず
@@ -503,6 +637,7 @@ async function sheet(page, file, rows) {
   await page.evaluate(() => window.__hg.setAdvOpen(true));
   await page.fill('#works .work:nth-child(2) input.title', 'Renamed Work');
   await page.click('#pace button[data-v="tight"]');
+  await page.evaluate(() => window.__hg.setOpt('exclude', { opener: ['boot'], decor: ['dots', 'grid'] }));
   const before = await page.evaluate(() => {
     const s = window.__hg.state;
     const w = s.works[0];
@@ -518,13 +653,14 @@ async function sheet(page, file, rows) {
     const s = window.__hg.state;
     return {
       artist: document.querySelector('#artist').value, subline: document.querySelector('#subline').value,
-      seed: s.seed, pace: s.pace, names: s.works.map((x) => x.name), title: s.works[1].title,
+      seed: s.seed, pace: s.pace, exclude: s.exclude, names: s.works.map((x) => x.name), title: s.works[1].title,
       focal: s.works[0].focal, autoTitle: s.works[1].autoTitle,
     };
   });
   check('restore: images come back in order', JSON.stringify(after.names) === JSON.stringify(before.names), after.names.join(','));
   check('restore: text fields', after.artist === 'SAVE TEST' && after.subline === 'SUB', `${after.artist}/${after.subline}`);
   check('restore: seed and advanced settings', after.seed === before.seed && after.pace === 'tight', `${after.seed} ${after.pace}`);
+  check('restore: excluded effects', JSON.stringify(after.exclude) === '{"opener":["boot"],"decor":["grid","dots"]}', JSON.stringify(after.exclude));
   check('restore: edited title and manual focal', after.title === 'Renamed Work' && after.autoTitle !== 'Renamed Work' && after.focal.length === 1 && after.focal[0].manual && Math.abs(after.focal[0].x - 0.2) < 1e-6, JSON.stringify([after.title, after.focal]));
   // 1 枚外すと、その画像も保存から消える
   await page.click('#works .work:nth-child(1) .x');
@@ -683,12 +819,278 @@ async function sheet(page, file, rows) {
   await page.close();
 }
 
+// ---- 11. 曲: 選ぶとテンポと拍を推定して表示。BPM の手直し・倍/半分・小節の頭・タップ・保存と復元・外す
+{
+  // テスト用の曲: 124 BPM・最初の拍 0.61 秒。キックは 1・3 拍目、スネアは 2・4 拍目、ハイハットは 8 分
+  const sr = 44100, secs = 24, bpm = 124, offset = 0.61, beat = 60 / bpm;
+  const x = new Float32Array(sr * secs);
+  let seed = 7;
+  const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296);
+  for (let i = 0; i < x.length; i++) x[i] = (rnd() - 0.5) * 0.03 + 0.08 * Math.sin((2 * Math.PI * 220 * i) / sr);
+  const hit = (t, f) => { const i0 = Math.round(t * sr); for (let j = 0; j < sr * 0.15 && i0 + j < x.length; j++) x[i0 + j] += f(j / sr); };
+  for (let k = 0; offset + k * beat < secs - 0.3; k++) {
+    const t = offset + k * beat;
+    if (k % 2 === 0) hit(t, (u) => 0.9 * Math.sin(2 * Math.PI * (50 + 90 * Math.exp(-u * 40)) * u) * Math.exp(-u * 20));
+    else hit(t, (u) => (0.4 * (rnd() - 0.5) + 0.2 * Math.sin(2 * Math.PI * 190 * u)) * Math.exp(-u * 25));
+    hit(t, (u) => 0.15 * (rnd() - 0.5) * Math.exp(-u * 90));
+    hit(t + beat / 2, (u) => 0.12 * (rnd() - 0.5) * Math.exp(-u * 90));
+  }
+  const wav = Buffer.alloc(44 + x.length * 2);
+  wav.write('RIFF', 0); wav.writeUInt32LE(36 + x.length * 2, 4); wav.write('WAVEfmt ', 8);
+  wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22); wav.writeUInt32LE(sr, 24);
+  wav.writeUInt32LE(sr * 2, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34); wav.write('data', 36); wav.writeUInt32LE(x.length * 2, 40);
+  for (let i = 0; i < x.length; i++) wav.writeInt16LE(Math.round(Math.max(-1, Math.min(1, x[i] * 0.8)) * 32767), 44 + i * 2);
+
+  const { page, errors } = await openPage({ width: 1280, height: 800 });
+  check('song: BETA badge on the song field', await page.evaluate(() => document.querySelector('#song-field > label .beta').textContent === 'BETA'));
+  check('song: panel hidden before choosing', await page.evaluate(() => document.querySelector('#song-panel').hidden && document.querySelector('#song-clear').hidden));
+  await page.setInputFiles('#song-file', { name: 'test-beat.wav', mimeType: 'audio/wav', buffer: wav });
+  await page.waitForFunction(() => window.__hg.song.cur, null, { timeout: 60000 });
+  const got = await page.evaluate(() => {
+    const s = window.__hg.song.cur;
+    return { name: s.name, duration: s.duration, grid: s.grid, source: s.source, bpmField: document.querySelector('#song-bpm').value, panel: !document.querySelector('#song-panel').hidden, hint: document.querySelector('#song-hint').textContent };
+  });
+  const phaseErr = (first) => { const d = (((first - offset) % beat) + beat * 1.5) % beat - beat / 2; return Math.abs(d); };
+  const downErr = (g) => { const bar = beat * 4, d = (((g.first + g.bar * g.beat - offset) % bar) + bar * 1.5) % bar - bar / 2; return Math.abs(d); };
+  check('song: BPM estimated within ±1', Math.abs(got.grid.bpm - bpm) < 1, got.grid.bpm.toFixed(2));
+  check('song: beat position within 30ms', phaseErr(got.grid.first) < 0.03, (phaseErr(got.grid.first) * 1000).toFixed(1) + 'ms');
+  check('song: downbeat found', downErr(got.grid) < 0.03, JSON.stringify(got.grid));
+  check('song: UI shows name, BPM and duration', got.panel && got.name === 'test-beat.wav' && got.bpmField === got.grid.bpm.toFixed(1) && Math.abs(got.duration - secs) < 0.1 && got.hint.includes('BPM') && got.source === 'auto', JSON.stringify(got));
+  // 倍・半分・入力・小節の頭・自動に戻す
+  await page.click('#song-half');
+  const half = await page.evaluate(() => window.__hg.song.cur.grid.bpm);
+  await page.click('#song-double');
+  const dbl = await page.evaluate(() => window.__hg.song.cur.grid.bpm);
+  await page.click('#song-double'); // 240 を超えるので変わらない
+  const capped = await page.evaluate(() => window.__hg.song.cur.grid.bpm);
+  await page.fill('#song-bpm', '130');
+  await page.press('#song-bpm', 'Enter');
+  const typed = await page.evaluate(() => ({ bpm: window.__hg.song.cur.grid.bpm, source: window.__hg.song.cur.source }));
+  check('song: ÷2 / ×2 / typed BPM', Math.abs(half - got.grid.bpm / 2) < 1e-6 && Math.abs(dbl - got.grid.bpm) < 1e-6 && capped === dbl && typed.bpm === 130 && typed.source === 'manual', `${half} ${dbl} ${capped} ${JSON.stringify(typed)}`);
+  await page.click('#song-bar-next');
+  const shifted = await page.evaluate(() => window.__hg.song.cur.grid.bar);
+  check('song: shift downbeat', shifted === (got.grid.bar + 1) % 4, `${got.grid.bar}→${shifted}`);
+  await page.click('#song-reset');
+  check('song: reset to estimate', await page.evaluate((g) => JSON.stringify(window.__hg.song.cur.grid) === JSON.stringify(g) && window.__hg.song.cur.source === 'auto' && document.querySelector('#song-reset').disabled, got.grid));
+  // タップ: 推定に近い間隔なら間隔は推定のまま、位置と倍・半分だけ直る
+  const taps = await page.evaluate(async ({ beat, offset }) => {
+    const m = await import('./src/music.js');
+    const g = { bpm: 62, beat: 60 / 62, first: 0.2, bar: 0 }; // 半分・位置違いで推定を間違えた想定
+    const t = [8, 9, 10, 11, 12, 13].map((k) => offset + k * beat + (k % 2 ? 0.012 : -0.012));
+    return { fixed: m.applyTaps(g, t), raw: m.tempoFromTaps(t), few: m.applyTaps(g, t.slice(0, 3)) };
+  }, { beat, offset });
+  check('song: taps fix octave and phase', Math.abs(taps.fixed.bpm - 124) < 1e-6 && phaseErr(taps.fixed.first) < 0.005 && Math.abs(taps.raw.bpm - bpm) < 2 && taps.few === null, JSON.stringify(taps));
+  // 試聴: 再生で拍の丸が動き、映像を再生すると止まる
+  await page.click('#song-play');
+  const playing = await page.waitForFunction(() => document.querySelector('#song-field').classList.contains('playing'), null, { timeout: 10000 }).then(() => true, () => false);
+  if (playing) {
+    await page.waitForTimeout(600);
+    check('song: preview runs', await page.evaluate(() => document.querySelector('#song-time').textContent.startsWith('0:0') && [...document.querySelectorAll('#song-lamp i')].some((i) => i.style.opacity !== '')));
+    await page.click('#song-play');
+    check('song: preview stops', await page.evaluate(() => !document.querySelector('#song-field').classList.contains('playing')));
+  } else {
+    console.log('(song preview skipped: audio playback unavailable in this browser)');
+  }
+  // 保存と復元: 読み込み直すと曲と手直しが戻る（解析し直さない）
+  await page.click('#song-bar-prev');
+  const saved = await page.evaluate(() => JSON.stringify(window.__hg.song.cur.grid));
+  await page.waitForTimeout(1200);
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.waitForFunction(() => window.__hg.song.cur, null, { timeout: 30000 });
+  const restored = await page.evaluate(() => ({ grid: JSON.stringify(window.__hg.song.cur.grid), name: window.__hg.song.cur.name, source: window.__hg.song.cur.source, size: window.__hg.song.cur.blob.size }));
+  check('song: restored after reload', restored.grid === saved && restored.name === 'test-beat.wav' && restored.source === 'manual' && restored.size === wav.length, JSON.stringify(restored));
+  // 映像を曲に合わせる: テンポは曲の BPM（倍・半分）、作品の切り替えとエンディングは曲の小節の頭、最後に音を消す
+  await page.click('#song-reset');
+  await page.evaluate(() => window.__hg.loadSamples());
+  await page.waitForFunction(() => window.__hg.state.works.length === 6, null, { timeout: 30000 });
+  const synced = await page.evaluate(() => {
+    const h = window.__hg;
+    h.setSeed('SONG-SYNC');
+    const f = h.build();
+    const g = h.song.cur.grid;
+    const bar = g.beat * 4, d0 = g.first + g.bar * g.beat;
+    const offBar = (x) => { const d = (((x - d0) % bar) + bar * 1.5) % bar - bar / 2; return Math.abs(d); };
+    return {
+      bpm: f.bpm, songBpm: g.bpm, music: f.music, duration: f.duration,
+      starts: f.segments.slice(1).map((s) => offBar(f.music.offset + s.start)),
+      opener: f.segments[0].dur, bar, summary: f.summary.map((s) => [s.kind, s.variant, s.theme, s.out]),
+      hint: document.querySelector('#go-hint').textContent,
+    };
+  });
+  const ratio = synced.bpm / synced.songBpm;
+  check('song sync: film tempo follows the song (or its double/half)', [0.5, 1, 2].some((m) => Math.abs(ratio - m) < 1e-9), `${synced.bpm} / ${synced.songBpm}`);
+  check('song sync: works and ending start on the song\'s downbeats (±1 frame)', synced.starts.every((d) => d < 1 / 60), JSON.stringify(synced.starts.map((d) => +d.toFixed(4))));
+  check('song sync: song starts within the first bar before the opening ends', synced.music.offset >= 0 && synced.music.offset < synced.bar, JSON.stringify(synced.music));
+  check('song sync: fades out over the last 2 beats', Math.abs(synced.music.fadeTo - synced.duration) < 1e-9 && Math.abs(synced.duration - synced.music.fadeFrom - 2 * 60 / synced.bpm) < 1e-9);
+  const est = +(synced.hint.match(/約 (\d+) 秒/) || [])[1];
+  check('song sync: length hint follows the song', Math.abs(est - synced.duration) <= synced.duration * 0.15, `${synced.hint} / ${synced.duration.toFixed(1)}`);
+  // 曲が映像より短ければ、作品の拍数を減らして収める（24 秒の曲に 3 作品・ゆったり）
+  const fitted = await page.evaluate(() => {
+    const h = window.__hg, s = h.song.cur;
+    const all = h.state.works.slice();
+    h.setAdvOpen(true);
+    h.setOpt('pace', 'relaxed');
+    h.state.works.splice(3);
+    const f = h.build();
+    const res = { end: f.music.offset + f.duration, song: s.duration, workBeats: Math.round(f.segments[1].dur / f.beat) };
+    // 同じ設定で、曲が十分に長かったときの拍数
+    const dur = s.duration;
+    s.duration = 1e4;
+    res.fullBeats = Math.round(h.build().segments[1].dur / f.beat);
+    s.duration = dur;
+    h.state.works.splice(0, h.state.works.length, ...all);
+    h.setOpt('pace', 'normal');
+    h.setAdvOpen(false);
+    return res;
+  });
+  check('song sync: shortens each work to fit a short song', fitted.end <= fitted.song + 1e-6 && fitted.workBeats < fitted.fullBeats && fitted.workBeats % 4 === 0, JSON.stringify(fitted));
+  // 曲の有無で抽選の結果（見せ方・スタイル・切り替え）は変わらない。曲がなければ今までどおりの整数の BPM・音なし
+  const plain = await page.evaluate(() => {
+    const h = window.__hg;
+    const s = h.song.cur;
+    h.song.cur = null;
+    h.setSeed('SONG-SYNC');
+    const f = h.build();
+    h.song.cur = s;
+    return { bpm: f.bpm, music: f.music, summary: f.summary.map((x) => [x.kind, x.variant, x.theme, x.out]) };
+  });
+  check('song sync: same picks with or without a song', JSON.stringify(plain.summary) === JSON.stringify(synced.summary), JSON.stringify(plain.summary));
+  check('song sync: without a song the film is silent with a whole BPM', plain.music === null && Number.isInteger(plain.bpm));
+  // 同期再生: 映像の時刻が曲の再生位置に従う。一時停止・次の作品へ移動で曲も合わせる
+  await page.evaluate(() => { window.__hg.setSeed('SONG-SYNC'); window.__hg.build(); });
+  await page.click('#go');
+  const audible = await page.waitForFunction(() => window.__hg.musicTime(window.__hg.state.film.music) !== null, null, { timeout: 10000 }).then(() => true, () => false);
+  if (audible) {
+    // 描いた瞬間の映像の時刻と曲の位置を記録する（ソフトウェア描画は 1 コマが遅いので、コマの合間に読むと比べられない）
+    await page.evaluate(() => {
+      const h = window.__hg, f = h.state.film, render = f.render;
+      window.__drawn = [];
+      f.render = (r, t) => { window.__drawn.push({ t, mt: h.musicTime(f.music) }); return render(r, t); };
+    });
+    // 描けたコマが揃うまで待つ（決まった時間だと、描画の遅い環境ではコマが足りない）
+    const drawnSince = (from, minT) => page.waitForFunction(({ from, minT }) => window.__drawn.slice(from).filter((d) => d.mt !== null && d.t >= minT).length >= 3, { from, minT }, { timeout: 60000 }).catch(() => {});
+    const lastDrawn = (from = 0) => page.evaluate((from) => window.__drawn.slice(from).filter((d) => d.mt !== null).slice(-3), from);
+    await drawnSince(0, 1);
+    const a = await lastDrawn();
+    check('song sync: video clock follows the song while playing', a.length === 3 && a[2].t > 1 && a.every((d) => Math.abs(d.mt - d.t) < 0.05), JSON.stringify(a));
+    const mark = await page.evaluate(() => window.__drawn.length);
+    await page.keyboard.press('ArrowRight');
+    await page.keyboard.press('ArrowRight');
+    const start = await page.evaluate(() => window.__hg.state.film.segments[2].start);
+    await drawnSince(mark, start);
+    const b = await lastDrawn(mark);
+    check('song sync: jumping to the next work moves the song too', b.length === 3 && b[0].t >= start && b.every((d) => Math.abs(d.mt - d.t) < 0.05), JSON.stringify({ start, b }));
+    await page.evaluate(() => window.__hg.pause());
+    check('song sync: pausing the film pauses the song', await page.evaluate(() => window.__hg.musicTime(window.__hg.state.film.music) === null));
+  } else {
+    console.log('(song sync playback skipped: audio playback unavailable in this browser)');
+  }
+  // 書き出し用の切り出し: 曲の offset から映像の尺だけ。頭は立ち上げ、最後はフェード、足りなければ無音、2ch
+  const cut = await page.evaluate(async () => {
+    const { cutSong } = await import('./src/music.js');
+    const sr = 1000, a = new Float32Array(5000).fill(1);
+    const [l, r] = cutSong([a], sr, { offset: 1, duration: 6, fadeFrom: 3, fadeTo: 4 });
+    return { n: [l.length, r.length], start: [l[0], l[10]], before: l[2999], mid: l[3500], after: l[4001], tail: l[5999], same: l.every((v, i) => v === r[i]) };
+  });
+  check('song export: cutSong trims, ramps in, fades out, pads and makes stereo',
+    cut.n[0] === 6000 && cut.n[1] === 6000 && cut.start[0] === 0 && cut.start[1] === 1 && cut.before === 1 && Math.abs(cut.mid - 0.5) < 0.01 && cut.after === 0 && cut.tail === 0 && cut.same, JSON.stringify(cut));
+  // 書き出し: 曲が入る（AAC、なければ Opus）。画面に音声の方式と権利の注意書き
+  await page.click('#export');
+  await page.click('#xp-fps button[data-v="30"]');
+  await page.click('#xp-res button[data-v="720"]'); // 小さい解像度でも書き出せることをここで確かめる
+  await page.waitForFunction(() => !document.querySelector('#xp-info').textContent.includes('判定中'));
+  const xinfo = await page.textContent('#xp-info');
+  const acodec = (xinfo.match(/音声: (\S+)（/) || [])[1];
+  console.log(`song export: audio=${acodec}`);
+  check('song export: dialog shows the rights notice', xinfo.includes('曲の権利はご自身で確認'), xinfo);
+  if (acodec) {
+    check('song export: dialog shows the audio codec and song', xinfo.includes('test-beat.wav'), xinfo);
+    // AAC は OS のエンコーダーを使うので、Linux の Chrome（CI）では使えず Opus になる。どちらかで書き出せればよい
+    check('song export: audio is AAC or Opus', acodec === 'AAC' || acodec === 'Opus', `audio=${acodec}`);
+    await page.evaluate(() => { window.__hg.xp.limit = 2; });
+    const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 300000 }), page.click('#xp-start')]);
+    const file = join(outDir, 'export-song.mp4');
+    await dl.saveAs(file);
+    const bytes = readFileSync(file).toString('latin1');
+    check('song export: mp4 has an audio track', bytes.includes('soun') && (bytes.includes('mp4a') || bytes.includes('Opus')));
+    const dim = await page.evaluate(async () => {
+      const v = document.createElement('video');
+      v.muted = true;
+      v.src = URL.createObjectURL(window.__hg.state.lastExport.blob);
+      await new Promise((r, j) => { v.onloadedmetadata = r; v.onerror = () => j(new Error('video error')); });
+      return `${v.videoWidth}x${v.videoHeight}`;
+    });
+    check('song export: 720p export is 1280x720', dim === '1280x720', dim);
+    // 音声を読み戻して、長さと音が入っていることを確かめる（読めないブラウザでは省く）
+    const au = await page.evaluate(async () => {
+      try {
+        const buf = await window.__hg.state.lastExport.blob.arrayBuffer();
+        const ab = await new OfflineAudioContext(2, 1, 48000).decodeAudioData(buf);
+        const d = ab.getChannelData(0);
+        let s = 0;
+        for (let i = 0; i < d.length; i++) s += d[i] * d[i];
+        return { dur: ab.duration, rms: Math.sqrt(s / d.length) };
+      } catch (e) { return { error: String(e) }; }
+    });
+    if (au.error) console.log('(song export audio decode skipped: ' + au.error + ')');
+    else check('song export: audio is as long as the film and not silent', Math.abs(au.dur - 2) < 0.1 && au.rms > 0.01, JSON.stringify(au));
+    // 書き出し後の読み戻しの確認（音が入っていなければ画面で知らせる）が通っている
+    const ai = await page.evaluate(() => ({ info: window.__hg.state.lastExport.audioInfo, hidden: document.querySelector('#xp').hidden }));
+    check('song export: dialog closes and audio diagnostics are kept', ai.hidden && ai.info.chunks > 0 && ai.info.bytes > 0, JSON.stringify(ai));
+    // AAC の設定情報: 素の AudioSpecificConfig・ES_Descriptor（Apple のエンコーダーが返す形）・esds の箱ごと、から中身を取り出す
+    const asc = await page.evaluate(async () => {
+      const { aacSpecificConfig } = await import('./src/export.js');
+      const es = [0x03, 0x19, 0, 0, 0, 0x04, 0x11, 0x40, 0x15, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x05, 0x02, 0x11, 0x90, 0x06, 0x01, 0x02];
+      // iPhone 17 Pro の Safari が実際に返した形（先頭 24 バイトは実物どおり）
+      const esLong = [0x03, 0x80, 0x80, 0x80, 0x22, 0, 0, 0, 0x04, 0x80, 0x80, 0x80, 0x14, 0x40, 0x14, 0, 0x18, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x05, 0x80, 0x80, 0x80, 0x02, 0x11, 0x90, 0x06, 0x80, 0x80, 0x80, 0x01, 0x02];
+      const f = (x) => { const r = aacSpecificConfig(x && new Uint8Array(x)); return r ? [...r] : null; };
+      return [f([0x11, 0x90]), f(es), f(esLong), f([0, 0, 0, 39, 0x65, 0x73, 0x64, 0x73, 0, 0, 0, 0, ...es]), f([0x03, 0x01]), f(null), f(new Array(30).fill(0x11))];
+    });
+    check('song export: AAC config taken out of ES descriptors', JSON.stringify(asc) === JSON.stringify([[17, 144], [17, 144], [17, 144], [17, 144], null, null, null]), JSON.stringify(asc));
+    // AAC を ADTS の見出し付きで出すエンコーダー向け: 見出しを取り除く（見出しがなければそのまま）
+    const adts = await page.evaluate(async () => {
+      const { stripAdts } = await import('./src/export.js');
+      const mk = (bytes) => new EncodedAudioChunk({ type: 'key', timestamp: 0, data: new Uint8Array(bytes) });
+      const read = (c) => { const d = new Uint8Array(c.byteLength); c.copyTo(d); return [...d]; };
+      return {
+        noCrc: read(stripAdts(mk([0xff, 0xf1, 0x4c, 0x80, 0x01, 0x7f, 0xfc, 1, 2, 3]))),
+        crc: read(stripAdts(mk([0xff, 0xf0, 0x4c, 0x80, 0x01, 0x7f, 0xfc, 9, 9, 1, 2]))),
+        raw: read(stripAdts(mk([0x21, 0x10, 5, 6, 7, 8, 9, 10]))),
+      };
+    });
+    check('song export: strips ADTS headers from AAC frames', JSON.stringify(adts) === JSON.stringify({ noCrc: [1, 2, 3], crc: [1, 2], raw: [0x21, 0x10, 5, 6, 7, 8, 9, 10] }), JSON.stringify(adts));
+  } else {
+    check('song export: dialog says the song is not included', xinfo.includes('曲は入りません'), xinfo);
+    await page.click('#xp-close');
+  }
+  await page.click('#back');
+  await page.waitForTimeout(300);
+  await page.evaluate(() => { document.querySelector('#song-field').scrollIntoView(); });
+  await page.screenshot({ path: join(outDir, 'song-field.png') });
+  // 外す: 保存からも消える
+  await page.click('#song-clear');
+  await page.waitForTimeout(1200);
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.waitForTimeout(1500);
+  check('song: cleared and not restored', await page.evaluate(() => !window.__hg.song.cur && document.querySelector('#song-panel').hidden));
+  // 読めないファイル: 知らせて、状態は変えない
+  await page.setInputFiles('#song-file', { name: 'broken.mp3', mimeType: 'audio/mpeg', buffer: Buffer.from('not audio at all') });
+  await page.waitForFunction(() => document.querySelector('#toast').classList.contains('show'), null, { timeout: 20000 });
+  check('song: unreadable file shows message', await page.evaluate(() => !window.__hg.song.cur && document.querySelector('#toast').textContent.includes('読み込めません')));
+  check('no page errors (song)', errors.length === 0, errors.join('\n'));
+  await page.close();
+}
+
 // ---- 12. 詳細設定からカタログへ／全画面に対応していないブラウザでは全画面ボタンを出さない
 {
   const { page, errors } = await openPage({ width: 1280, height: 800 });
   await page.evaluate(() => window.__hg.setAdvOpen(true));
-  const links = await page.evaluate(() => [...document.querySelectorAll('#adv a.cat-link')].map((a) => a.getAttribute('href')));
+  const links = await page.evaluate(() => [...document.querySelectorAll('#adv label a.cat-link')].map((a) => a.getAttribute('href')));
   check('advanced settings link to the catalog', JSON.stringify(links) === JSON.stringify(['#catalog=style', '#catalog=opener', '#catalog=closer']), links.join(','));
+  // 出さない演出の各カテゴリからも、そのカテゴリのカタログへ
+  const exLinks = await page.evaluate(() => [...document.querySelectorAll('#exclude a.cat-link')].map((a) => a.getAttribute('href').replace('#catalog=', '')));
+  const cats = await page.evaluate(() => window.__hg.fx.CATEGORIES.map((c) => c.key));
+  check('exclude sections link to the catalog', JSON.stringify(exLinks) === JSON.stringify(cats), exLinks.join(','));
   await page.click('#adv a[href="#catalog=closer"]');
   await page.waitForFunction(() => !document.querySelector('#catalog').hidden, null, { timeout: 10000 });
   check('catalog link opens that category', await page.evaluate(() => window.__hg.catalog.current === 'closer'));

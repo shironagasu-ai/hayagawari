@@ -19,7 +19,7 @@ npm test                        # E2E（tests/e2e.mjs）。Chromium の実体は
 node tools/check-version.mjs    # src/version.js・package.json・CHANGELOG.md のバージョンが一致しているか
 ```
 
-- E2E のスクリーンショット・見本シート（`sheet-*.png`。比率違いは `*-9x16.png`・`*-4x3.png`・`*-3x4.png`）・書き出した動画は `tests/output/` に出る（git には入れない）
+- E2E のスクリーンショット・見本シート（`sheet-*.png`。比率違いは `*-9x16.png`・`*-4x3.png`・`*-3x4.png`）・書き出した動画は `tests/output/` に出る（git には入れない）。比率違いの見本シートは `E2E_ASPECT_SHEETS=0` で省ける（CI の Chrome 側はこれで短縮している）
 - 変更したら `npm test` が全件通ることを確認してからプッシュする
 
 ## 構成
@@ -27,7 +27,7 @@ node tools/check-version.mjs    # src/version.js・package.json・CHANGELOG.md �
 ```
 index.html          … UI（編集画面・プレイヤー・演出カタログ）
 src/main.js         … UI の配線・メインループ・書き出しダイアログ
-src/director.js     … シードから映像の設計図を作り、時刻 t の絵を描く（演出の抽選・つなぎ・HUD）
+src/director.js     … シードから映像の設計図を作り、時刻 t の絵を描く（演出の抽選・つなぎ・HUD・曲に合わせたテンポと長さ）
 src/fx/             … 演出そのもの（themes / openers / closers / variants / transitions / decors / palettes、共通部品 bookend-kit）
 src/fx/labels.js    … 演出の表示名と説明（カタログと詳細設定のボタンに使う）
 src/catalog.js      … 演出カタログ（#catalog）
@@ -35,8 +35,11 @@ src/kit.js          … 演出共通の部品（注目点・画像カメラ・�
 src/gl.js           … WebGL2 レンダラー（マスク・方向ブラー・トランジション合成・ポスト）
 src/analyze.js      … 注目点検出（顕著性マップ）とパレット抽出
 src/focal-editor.js … 注目点エディタ
-src/export.js       … 1 コマずつの書き出し（WebCodecs → MP4。音声を入れる仕組みもあるが v1.0.0 では使っていない）
+src/export.js       … 1 コマずつの書き出し（WebCodecs → MP4。持ち込んだ曲を AAC（なければ Opus）で入れる）
 src/store.js        … 作業の保存（IndexedDB）
+src/music.js        … 曲の解析（テンポ・拍・小節の頭の推定、タップでの補正）と書き出し用の切り出し（cutSong）。decodeSong 以外は DOM を使わず Node でも動く
+src/music-worker.js … 曲の解析を Worker で動かす入口
+src/song.js         … 曲の欄の UI（選ぶ・試聴・手直し・保存）と、プレーヤーでの曲の同期再生（musicPlay / musicTime）・書き出す音声（songAudio）
 src/version.js      … バージョン・ビルド情報・プレビュー判定・保存キー
 src/text.js         … 文字のテクスチャ化
 src/ease.js         … イージング（タメツメ用の cubic-bezier / 予備動作付き加速など）
@@ -90,6 +93,19 @@ v1.0.0 のように複数の PR にまたがる版は、途中の状態を本番
 - 統合ブランチ → main の PR を下書きで開いておき、そのプレビューで全体を確認する
 - 本番の不具合は main に直接直して PATCH で出し、統合ブランチにも取り込む
 - 最後の PR でバージョンを上げ、統合ブランチの PR を main にマージするとリリースされる
+
+## 作業の進め方（エージェント向けの申し合わせ）
+
+- やりとりは日本語、時刻は JST で伝える
+- ブランチを作り直す（reset・強制プッシュ）前に、元の PR が GitHub 上で本当にマージ済みか（merged=true・コミットが取り込まれているか）を必ず確かめる。取り違えて開いている PR を閉じてしまった失敗がある
+- GitHub の PR を MCP で作ると本文の末尾に帰属のフッターが自動で付くので、作成後に本文を上書きして消す（下の「コミットと PR」の決まり）
+- 統合ブランチ（`release/vX`）への小さな修正は、ユーザーの了承があれば PR を作らず直接プッシュしてよい（v1.0.0 の仕上げでそうした）。都度確認する
+- クラウドの作業環境での注意:
+  - Playwright の版とブラウザの実体が合わないので `CHROMIUM_PATH=/opt/pw-browsers/chromium npm test` で動かす
+  - 作例動画の作り直しに使う ffmpeg は `pip install imageio-ffmpeg` で入る静的ビルド（libx264 と libwebp_anim 入り）。`FFMPEG=$(python3 -c 'import imageio_ffmpeg;print(imageio_ffmpeg.get_ffmpeg_exe())')`
+  - 作業環境から `*.github.io`（本番・プレビュー）は開けない（プロキシで止まる）。公開の確認は Actions の結果とリリースで行う
+  - 手元の Chromium は H.264 が使えないので、Chrome でだけ通る分岐（作例動画の再生・H.264 の書き出し）は CI の結果で確かめる
+  - AAC の書き出しは Linux の Chrome（CI）でも使えない（OS のエンコーダーを使うため）。CI では Opus になる。AAC は Mac・Windows の実機で確かめる
 
 ## コミットと PR
 
