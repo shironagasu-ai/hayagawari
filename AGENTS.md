@@ -15,11 +15,14 @@
 ```sh
 python3 -m http.server 8000     # ローカルで開く → http://localhost:8000/
 npm ci                          # テストの依存（Playwright）
-npm test                        # E2E（tests/e2e.mjs）。Chromium の実体は CHROMIUM_PATH で指定できる
+npm test                        # 単体テスト → E2E（全部）。Chromium の実体は CHROMIUM_PATH で指定できる
+npm run test:unit               # 単体テストだけ（tests/unit/。画面を使わない計算。1 秒かからない）
+npm run test:e2e                # E2E だけ（tests/e2e.mjs）。E2E_SHARD=1 / 2 で半分ずつ（CI と同じ分け方）
 node tools/check-version.mjs    # src/version.js・package.json・CHANGELOG.md のバージョンが一致しているか
 ```
 
-- E2E のスクリーンショット・見本シート（`sheet-*.png`。比率違いは `*-9x16.png`・`*-4x3.png`・`*-3x4.png`）・書き出した動画は `tests/output/` に出る（git には入れない）。比率違いの見本シートは `E2E_ASPECT_SHEETS=0` で省ける（CI の Chrome 側はこれで短縮している）
+- E2E のスクリーンショット・見本シート（`sheet-*.png`。比率違いは `*-9x16.png`・`*-4x3.png`・`*-3x4.png`）・書き出した動画は `tests/output/` に出る（git には入れない）。比率違いの見本シートは `E2E_ASPECT_SHEETS=0` で省ける（CI は Actions の画面から手で動かしたときだけ作る）
+- テストの置き場所: 画面を使わない計算（曲の解析・曲に合わせたテンポ・AAC の設定情報など）は `tests/unit/` の単体テストに書く。画面・描画・ブラウザの機能（WebCodecs・音声の再生など）が要るものだけ E2E に書く
 - 変更したら `npm test` が全件通ることを確認してからプッシュする
 
 ## 構成
@@ -36,6 +39,7 @@ src/gl.js           … WebGL2 レンダラー（マスク・方向ブラー・�
 src/analyze.js      … 注目点検出（顕著性マップ）とパレット抽出
 src/focal-editor.js … 注目点エディタ
 src/export.js       … 1 コマずつの書き出し（WebCodecs → MP4。持ち込んだ曲を AAC（なければ Opus）で入れる）
+src/aac.js          … AAC の設定情報の取り出し（Safari の ES_Descriptor 対応。DOM を使わない）
 src/store.js        … 作業の保存（IndexedDB）
 src/music.js        … 曲の解析（テンポ・拍・小節の頭の推定、タップでの補正）と書き出し用の切り出し（cutSong）。decodeSong 以外は DOM を使わず Node でも動く
 src/music-worker.js … 曲の解析を Worker で動かす入口
@@ -47,6 +51,7 @@ src/rng.js          … シード付き乱数
 src/samples.js      … サンプル画像（assets/samples/）の一覧・タイトル・注目点
 vendor/             … 同梱ライブラリ（mp4-muxer 5.2.2・MIT）
 tools/              … 公開の組み立て・作例動画の生成・バージョン確認
+tests/unit/         … Node の単体テスト（node --test）
 tests/e2e.mjs       … Playwright による E2E テスト
 ```
 
@@ -104,7 +109,7 @@ v1.0.0 のように複数の PR にまたがる版は、途中の状態を本番
   - Playwright の版とブラウザの実体が合わないので `CHROMIUM_PATH=/opt/pw-browsers/chromium npm test` で動かす
   - 作例動画の作り直しに使う ffmpeg は `pip install imageio-ffmpeg` で入る静的ビルド（libx264 と libwebp_anim 入り）。`FFMPEG=$(python3 -c 'import imageio_ffmpeg;print(imageio_ffmpeg.get_ffmpeg_exe())')`
   - 作業環境から `*.github.io`（本番・プレビュー）は開けない（プロキシで止まる）。公開の確認は Actions の結果とリリースで行う
-  - 手元の Chromium は H.264 が使えないので、Chrome でだけ通る分岐（作例動画の再生・H.264 の書き出し）は CI の結果で確かめる
+  - 手元の Chromium は H.264 が使えないので、Chrome でだけ通る分岐（作例動画の再生・H.264 の書き出し）は CI の結果で確かめる（CI は Chrome だけで動かしている）
   - AAC の書き出しは Linux の Chrome（CI）でも使えない（OS のエンコーダーを使うため）。CI では Opus になる。AAC は Mac・Windows の実機で確かめる
 
 ## コミットと PR
@@ -118,7 +123,7 @@ v1.0.0 のように複数の PR にまたがる版は、途中の状態を本番
 
 | ワークフロー | いつ | 何を |
 |---|---|---|
-| `ci.yml`（CI） | PR・main へのプッシュ | バージョンの一致確認と E2E テスト（Playwright の Chromium と一般配布の Google Chrome。Chrome では H.264 の書き出しと作例動画の再生も確認）。スクリーンショットと書き出した動画は実行結果の Artifacts から 7 日間ダウンロードできる |
+| `ci.yml`（CI） | PR・main へのプッシュ | バージョンの一致確認・単体テスト・E2E テスト（一般配布の Google Chrome で 2 つに分けて同時に実行。H.264 の書き出しと作例動画の再生、H.264 を外したときの VP9 の書き出しも確認）。スクリーンショットと書き出した動画は実行結果の Artifacts から 7 日間ダウンロードできる。Actions の画面から手で動かすと比率違いの見本シートも作る |
 | `pages.yml`（Pages） | CI が通るたび・PR を閉じたとき | サイト全体を組み立てて GitHub Pages に公開（下記）。main でバージョンが上がっていればタグ `vX.Y.Z` と GitHub Release を作る |
 
 **公開される場所**
