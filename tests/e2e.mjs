@@ -907,13 +907,14 @@ async function sheet(page, file, rows) {
     if (au.error) console.log('(song export audio decode skipped: ' + au.error + ')');
     else check('song export: audio is as long as the film and not silent', Math.abs(au.dur - 2) < 0.1 && au.rms > 0.01, JSON.stringify(au));
     // 書き出し後の読み戻しの確認（音が入っていなければ画面で知らせる）が通っている
-    const ai = await page.evaluate(() => ({ ok: window.__hg.state.lastExport.audioOk, info: window.__hg.state.lastExport.audioInfo, hidden: document.querySelector('#xp').hidden }));
-    check('song export: exported audio verified after export', ai.ok === true && ai.hidden && ai.info.chunks > 0 && ai.info.bytes > 0, JSON.stringify(ai));
+    const ai = await page.evaluate(() => ({ info: window.__hg.state.lastExport.audioInfo, hidden: document.querySelector('#xp').hidden }));
+    check('song export: dialog closes and audio diagnostics are kept', ai.hidden && ai.info.chunks > 0 && ai.info.bytes > 0, JSON.stringify(ai));
     // AAC の設定情報: 素の AudioSpecificConfig・ES_Descriptor（Apple のエンコーダーが返す形）・esds の箱ごと、から中身を取り出す
     const asc = await page.evaluate(async () => {
       const { aacSpecificConfig } = await import('./src/export.js');
       const es = [0x03, 0x19, 0, 0, 0, 0x04, 0x11, 0x40, 0x15, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x05, 0x02, 0x11, 0x90, 0x06, 0x01, 0x02];
-      const esLong = [0x03, 0x80, 0x80, 0x80, 0x22, 0, 0, 0, 0x04, 0x80, 0x80, 0x80, 0x14, 0x40, 0x15, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x05, 0x80, 0x80, 0x80, 0x02, 0x11, 0x90, 0x06, 0x80, 0x80, 0x80, 0x01, 0x02];
+      // iPhone 17 Pro の Safari が実際に返した形（先頭 24 バイトは実物どおり）
+      const esLong = [0x03, 0x80, 0x80, 0x80, 0x22, 0, 0, 0, 0x04, 0x80, 0x80, 0x80, 0x14, 0x40, 0x14, 0, 0x18, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x05, 0x80, 0x80, 0x80, 0x02, 0x11, 0x90, 0x06, 0x80, 0x80, 0x80, 0x01, 0x02];
       const f = (x) => { const r = aacSpecificConfig(x && new Uint8Array(x)); return r ? [...r] : null; };
       return [f([0x11, 0x90]), f(es), f(esLong), f([0, 0, 0, 39, 0x65, 0x73, 0x64, 0x73, 0, 0, 0, 0, ...es]), f([0x03, 0x01]), f(null), f(new Array(30).fill(0x11))];
     });

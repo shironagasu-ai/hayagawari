@@ -104,7 +104,7 @@ export function aacSpecificConfig(desc) {
 }
 
 // AudioBuffer を丸ごとエンコードして muxer へ（0.1 秒ずつ AudioData にする）
-// info: 診断用（設定情報の中身・件数・バイト数）。音声が再生できなかったときに画面に出す
+// info: 診断用（設定情報の中身・件数・バイト数）。書き出したあとコンソールに出す
 async function encodeAudio(buffer, aenc, muxer, info) {
   let failure = null;
   const aac = aenc.muxCodec === 'aac';
@@ -152,23 +152,6 @@ async function encodeAudio(buffer, aenc, muxer, info) {
   if (!info.chunks) throw new Error('音声をエンコードできませんでした');
 }
 
-/**
- * 書き出した MP4 の音声をこのブラウザで読み戻せるか確かめる（読めない・無音なら false）
- * @param {Blob} blob
- */
-export async function audioPlayable(blob) {
-  try {
-    const Ctx = window.OfflineAudioContext || window.webkitOfflineAudioContext;
-    const ab = await new Ctx(1, 1, 48000).decodeAudioData(await blob.arrayBuffer());
-    const d = ab.getChannelData(0);
-    let peak = 0;
-    for (let i = 0; i < d.length; i += 64) peak = Math.max(peak, Math.abs(d[i]));
-    return ab.duration > 0.5 && peak > 1e-3;
-  } catch {
-    return false;
-  }
-}
-
 // タイマーの間引き（非表示タブで最大 1 秒）を受けずに、UI へ制御を返す
 const channel = new MessageChannel();
 const yieldQueue = [];
@@ -185,7 +168,7 @@ const yieldToUI = () => new Promise((r) => { yieldQueue.push(r); channel.port2.p
  * @param {(p:number, info:object)=>void} o.onProgress
  * @param {AbortSignal} o.signal
  * @param {{buffer: AudioBuffer, enc: object}} [o.audio] 音声（省略で映像のみ）。持ち込んだ曲を映像の尺に切り出したもの（song.js の songAudio）。
- *   書き出したあと audio.info に診断用の情報（設定情報・件数・バイト数）が入る
+ *   書き出したあと audio.info に診断用の情報（設定情報・件数・バイト数）が入る（main.js がコンソールに出す）
  * @returns {Promise<Blob>}
  */
 export async function exportFrames({ canvas, renderAt, duration, fps, enc, onProgress, signal, audio }) {

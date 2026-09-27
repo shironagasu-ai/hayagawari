@@ -6,7 +6,7 @@ import { buildFilm, fitTempo } from './director.js';
 import { SAMPLES, pickSamples, samplesByFile, fetchSamples } from './samples.js';
 import { randomSeed, createRng } from './rng.js';
 import { initFocalEditor, openFocalEditor } from './focal-editor.js';
-import { pickEncoderConfig, pickAudioConfig, exportFrames, audioPlayable } from './export.js';
+import { pickEncoderConfig, pickAudioConfig, exportFrames } from './export.js';
 import { newKey, putImage, saveSession, loadSession, requestPersist } from './store.js';
 import { song, initSong, setSongFile, clearSong, songMeta, stopPreview, musicPlay, musicPause, musicTime, musicLevel, songAudio } from './song.js';
 import { VERSION, BUILD, PREVIEW, storageKey } from './version.js';
@@ -735,20 +735,9 @@ async function startExport() {
     });
     download(blob, 'mp4');
     toast(`書き出し完了（${(blob.size / 1e6).toFixed(1)} MB・${xp.enc.label}${audio ? ' + ' + xp.aenc.label : ''} / MP4）`);
-    // 曲を入れたときは、書き出した音声をこのブラウザで読み戻せるか確かめる。
-    // 読めなければダイアログを閉じずに知らせ、原因を調べるための情報（音声の設定情報・件数）を出す
-    if (audio) {
-      state.lastExport.audioOk = await audioPlayable(blob);
-      state.lastExport.audioInfo = audio.info;
-      if (!state.lastExport.audioOk) {
-        const i = audio.info;
-        $('#xp-status').innerHTML = `<span class="warn">書き出した動画の音声（${xp.aenc.label}）をこのブラウザで再生できませんでした。この端末では音が出ない可能性があります。</span>`
-          + `<br>診断: ${escapeHtml(i.codec)} ・ ${i.chunks} 件 / ${i.bytes} バイト ・ 設定 ${i.desc} → ${i.asc} ・ 先頭 ${i.first}`;
-        $('#xp-close').textContent = '閉じる';
-        $('#xp-start').disabled = false;
-        return;
-      }
-    }
+    // 音声の診断（設定情報・件数）はコンソールにだけ出す。書き出した MP4 を読み戻して確かめることはしない
+    // （Safari の decodeAudioData は映像入りの MP4 から音声を読めず、音が入っていても失敗するため）
+    if (audio) { state.lastExport.audioInfo = audio.info; console.info('書き出した音声', audio.info); }
     $('#xp').hidden = true;
   } catch (e) {
     if (e.name === 'AbortError') toast('書き出しを中止しました');
