@@ -88,7 +88,20 @@ v1.0.0 では合成の音をなくした。v1.1 で、ユーザーが持ち込�
 - 曲がないときは今までどおり（無音・スタイルの BPM）
 - テスト: 合成ドラムを読み込んで映像の BPM が曲と一致すること、切り替えの時刻が拍に乗ること（±1 コマ）
 
-### (c) 書き出しに曲を入れる・権利の注意書き
+### (c) 書き出しに曲を入れる・権利の注意書き … 実装済み
+
+- 書き出すとき曲を 48kHz で読み直し（`songAudio`）、`cutSong` で映像の尺に切り出す（頭は 5ms で立ち上げ、最後の 2 拍でフェード、曲が短ければ残りは無音、2ch にそろえる）。`exportFrames({ audio })` で映像より先にエンコード
+- コーデックは `pickAudioConfig`（AAC → Opus）。Opus のとき・音声を書き出せないときは書き出しの画面で知らせる
+- 実時間の録画（WebCodecs が使えないブラウザ）では曲を入れない（対象のブラウザが少ないため見送り。画面で知らせる）
+- 曲の欄に BETA の表示。曲の欄と書き出しの画面に権利の注意書き
+- iPhone（Safari）で「書き出した動画に音が入らない」報告あり → 解決。手当て: AAC は `format: 'aac'` を指定し、ADTS の見出しが付いていれば取り除く／設定情報は AudioSpecificConfig にそろえ、読めない・空のときは muxer の推測値（AAC-LC）を使う／output の中の例外を拾って失敗にし、音声が 0 件なら失敗にする
+  - 原因（iPhone 17 Pro の Safari で確認）: Apple の AAC エンコーダーは設定情報を ES_Descriptor（`03 80 80 80 22 …`、esds の中身）で返していた。これをそのまま MP4 に入れると音声が再生できない。`aacSpecificConfig` で中の AudioSpecificConfig（`11 90`）を取り出すようにして、音が入ることを確認した
+  - 書き出し後に MP4 を読み戻して確かめる仕組み（`audioPlayable`）は外した。Safari の `decodeAudioData` は映像入りの MP4 から音声を読めず、音が入っていても「再生できない」と誤って知らせたため。診断（設定情報・件数・バイト数）はコンソールにだけ出す
+- AAC は OS のエンコーダーを使うので、Linux の Chrome（CI の Chrome も）では使えず Opus になる。AAC の経路は CI では通らない
+- 未確認のこと: 長い曲をスマホで書き出すときのメモリ（曲全体を 48kHz・float で読むので 4 分で約 90MB）。Mac・Windows の Chrome / Edge と Safari で AAC になるか（実機で確かめる）
+
+当初の計画:
+
 
 - `src/export.js` の `exportFrames({ audio })` は音声の経路が既にある（v1.0.0 では未使用）。曲を 48kHz で読み直し（`decodeSong(blob, 48000)`）、映像の尺に切り出し・最後をフェードして渡す。コーデックは `pickAudioConfig`（AAC 優先、なければ Opus）
 - 実時間の録画（WebCodecs が使えないブラウザ）でも曲が入るようにするかは要検討

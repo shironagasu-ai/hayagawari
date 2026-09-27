@@ -6,9 +6,9 @@ import { buildFilm, fitTempo } from './director.js';
 import { SAMPLES, pickSamples, samplesByFile, fetchSamples } from './samples.js';
 import { randomSeed, createRng } from './rng.js';
 import { initFocalEditor, openFocalEditor } from './focal-editor.js';
-import { pickEncoderConfig, exportFrames } from './export.js';
+import { pickEncoderConfig, pickAudioConfig, exportFrames } from './export.js';
 import { newKey, putImage, saveSession, loadSession, requestPersist } from './store.js';
-import { song, initSong, setSongFile, clearSong, songMeta, stopPreview, musicPlay, musicPause, musicTime, musicLevel } from './song.js';
+import { song, initSong, setSongFile, clearSong, songMeta, stopPreview, musicPlay, musicPause, musicTime, musicLevel, songAudio } from './song.js';
 import { VERSION, BUILD, PREVIEW, storageKey } from './version.js';
 import { initCatalog, catalogFilm, catalogKeys } from './catalog.js';
 import { CATEGORIES, labelOf } from './fx/labels.js';
@@ -660,11 +660,12 @@ function download(blob, ext) {
 
 // ---------------------------------------------------------------- 書き出し（1コマずつ・WebCodecs）
 
-const xp = { res: 1, fps: 60, enc: null, abort: null, running: false, limit: 0 }; // limit: テスト用に書き出す秒数を制限（音声は入れない）
+const xp = { res: 1080, fps: 60, enc: null, aenc: null, abort: null, running: false, limit: 0 }; // res: 書き出す短辺のピクセル数（仮想解像度の短辺は 1080）/ limit: テスト用に書き出す秒数を制限
 
 function exportSize() {
   const [W, H] = ASPECTS[state.aspect];
-  return [W * xp.res, H * xp.res];
+  const s = xp.res / 1080;
+  return [Math.round(W * s), Math.round(H * s)];
 }
 
 async function refreshExportInfo() {
@@ -672,17 +673,27 @@ async function refreshExportInfo() {
   const info = $('#xp-info');
   info.textContent = '判定中…';
   xp.enc = await pickEncoderConfig(w, h, xp.fps);
+  const music = state.film.music && song.cur;
+  xp.aenc = xp.enc && music ? await pickAudioConfig(48000, 2) : null;
   const d = state.film.duration;
   const frames = Math.ceil(d * xp.fps);
+  // 曲の権利の注意（曲を選んでいるときだけ）
+  const rights = music ? '<br>曲の権利はご自身で確認してください。書き出した動画を公開するときは、公開・配布してよい曲を使ってください。' : '';
   if (!xp.enc) {
-    info.innerHTML = `このブラウザは1コマずつの書き出しに対応していないため、<b>リアルタイム録画</b>になります（1080p・実時間 ${fmt(d)}・タブを前面にしたまま）。`;
+    info.innerHTML = `このブラウザは1コマずつの書き出しに対応していないため、<b>リアルタイム録画</b>になります（1080p・実時間 ${fmt(d)}・タブを前面にしたまま）。`
+      + (music ? '<br><span class="warn">リアルタイム録画では曲は入りません（映像だけになります）。</span>' : '');
     return;
   }
-  const mb = (xp.enc.config.bitrate * d) / 8 / 1e6;
+  const mb = ((xp.enc.config.bitrate + (xp.aenc ? xp.aenc.config.bitrate : 0)) * d) / 8 / 1e6;
   let msg = `方式: <b>1コマずつ（${xp.enc.label} / MP4）</b> ・ ${w}×${h} ・ ${xp.fps}fps ・ ${fmt(d)}（${frames} コマ）・ 約 ${mb.toFixed(0)} MB`;
+  if (xp.aenc) msg += `<br>音声: <b>${xp.aenc.label}</b>（${escapeHtml(song.cur.name)}）`;
   if (xp.enc.muxCodec !== 'avc') msg += `<br><span class="warn">このブラウザでは H.264 が使えないため ${xp.enc.label} になります。iPhone の写真アプリや一部の SNS では再生・投稿できないことがあります（Chrome / Edge / Safari なら H.264 で書き出せます）。</span>`;
-  info.innerHTML = msg;
+  if (music && !xp.aenc) msg += '<br><span class="warn">このブラウザは音声の書き出しに対応していないため、曲は入りません（映像だけになります）。</span>';
+  else if (xp.aenc && xp.aenc.muxCodec !== 'aac') msg += `<br><span class="warn">このブラウザでは AAC が使えないため、音声は ${xp.aenc.label} になります。iPhone や一部の SNS では音が出ないことがあります（Mac や Windows の Chrome / Edge などでは AAC で書き出せます）。</span>`;
+  info.innerHTML = msg + rights;
 }
+
+const escapeHtml = (s) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 function openExport() {
   if (!state.film || recorder || xp.running) return;
@@ -704,12 +715,18 @@ async function startExport() {
   $('#xp-close').textContent = '中止';
   $('#xp-progress').hidden = false;
   body.classList.add('exporting');
-  resize(xp.res);
+  resize(xp.res / 1080);
   const f = state.film;
   const dur = xp.limit > 0 ? Math.min(xp.limit, f.duration) : f.duration;
   try {
+    // 曲: 映像の尺に切り出して、映像より先にまとめてエンコードする
+    let audio = null;
+    if (xp.aenc && f.music && song.cur) {
+      $('#xp-status').textContent = '曲を準備しています…';
+      audio = { buffer: await songAudio(f.music, dur), enc: xp.aenc };
+    }
     const blob = await exportFrames({
-      canvas, fps: xp.fps, enc: xp.enc, duration: dur, signal: xp.abort.signal,
+      canvas, fps: xp.fps, enc: xp.enc, duration: dur, signal: xp.abort.signal, audio,
       renderAt: (t) => f.render(renderer, t),
       onProgress: (p, i) => {
         $('#xp-fill').style.transform = `scaleX(${p})`;
@@ -717,7 +734,10 @@ async function startExport() {
       },
     });
     download(blob, 'mp4');
-    toast(`書き出し完了（${(blob.size / 1e6).toFixed(1)} MB・${xp.enc.label} / MP4）`);
+    toast(`書き出し完了（${(blob.size / 1e6).toFixed(1)} MB・${xp.enc.label}${audio ? ' + ' + xp.aenc.label : ''} / MP4）`);
+    // 音声の診断（設定情報・件数）はコンソールにだけ出す。書き出した MP4 を読み戻して確かめることはしない
+    // （Safari の decodeAudioData は映像入りの MP4 から音声を読めず、音が入っていても失敗するため）
+    if (audio) { state.lastExport.audioInfo = audio.info; console.info('書き出した音声', audio.info); }
     $('#xp').hidden = true;
   } catch (e) {
     if (e.name === 'AbortError') toast('書き出しを中止しました');

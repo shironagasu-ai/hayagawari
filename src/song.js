@@ -1,6 +1,6 @@
 // 曲（任意）: 選ぶ → テンポと拍を推定 → 試聴しながら確かめ、ずれていればタップや BPM の入力で直す。
 // 曲はブラウザの中だけで扱い（解析も端末内）、このブラウザの保存領域にだけ残す。
-import { decodeSong, toMono, analyzeTempo, gridFromAnalysis, gridWithBpm, gridShiftBar, applyTaps } from './music.js';
+import { decodeSong, toMono, analyzeTempo, gridFromAnalysis, gridWithBpm, gridShiftBar, applyTaps, cutSong } from './music.js';
 import { newKey, putSong } from './store.js';
 
 const $ = (s) => document.querySelector(s);
@@ -8,6 +8,7 @@ const ANALYZE_SR = 22050; // テンポの解析はこの周波数で足りる
 const ANALYZE_MAX = 180; // 先頭から何秒を解析するか（映像はこれより短い）
 const MAX_BYTES = 80 * 1024 * 1024;
 const TAP_RESET = 2.5; // この秒数タップが空いたら数え直す
+const EXPORT_SR = 48000; // 書き出しの音声の周波数
 
 /**
  * 今の曲。なければ null
@@ -268,6 +269,23 @@ export function musicLevel(music, t) {
   if (!music || !sync.audio) return;
   const v = t <= music.fadeFrom ? 1 : Math.max(0, (music.fadeTo - t) / (music.fadeTo - music.fadeFrom));
   if (Math.abs(sync.audio.volume - v) > 1e-3) sync.audio.volume = v;
+}
+
+// ---------------------------------------------------------------- 書き出し
+
+/**
+ * 書き出す音声（曲を映像の尺に切り出し、最後をフェードした 2ch の AudioBuffer）
+ * @param {{ offset: number, fadeFrom: number, fadeTo: number }} music director の film.music
+ * @param {number} duration 書き出す秒数
+ */
+export async function songAudio(music, duration) {
+  if (!music || !song.cur) return null;
+  const ab = await decodeSong(song.cur.blob, EXPORT_SR);
+  const src = Array.from({ length: ab.numberOfChannels }, (_, c) => ab.getChannelData(c));
+  const chans = cutSong(src, ab.sampleRate, { ...music, duration });
+  const out = new AudioBuffer({ length: chans[0].length, numberOfChannels: 2, sampleRate: ab.sampleRate });
+  chans.forEach((d, c) => out.copyToChannel(d, c));
+  return out;
 }
 
 // ---------------------------------------------------------------- 表示
