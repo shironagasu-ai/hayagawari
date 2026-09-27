@@ -137,6 +137,7 @@ function analyze(x, sr) {
 export function clearSong() {
   ui.analyzing++;
   stopPreview();
+  musicPause();
   if (song.cur) URL.revokeObjectURL(song.cur.url);
   song.cur = null;
   ui.taps = [];
@@ -182,6 +183,7 @@ function tap() {
 function togglePreview() {
   if (!song.cur) return;
   if (previewing()) { stopPreview(); return; }
+  musicPause();
   if (!ui.audio) {
     ui.audio = new Audio();
     ui.audio.preload = 'auto';
@@ -223,6 +225,49 @@ function lamp() {
 const fmt = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 function updateTime(t) {
   if (song.cur) $('#song-time').textContent = `${fmt(t)} / ${fmt(song.cur.duration)}`;
+}
+
+// ---------------------------------------------------------------- 映像との同期再生
+// 映像の t 秒 = 曲の music.offset + t 秒（music は director の film.music）。
+// 映像の時計は曲に従わせる: main のループが musicTime() を見て、ずれが大きければ映像の時刻を合わせる
+
+const sync = { audio: null, url: '' };
+
+function syncAudio() {
+  if (!song.cur) return null;
+  if (!sync.audio) { sync.audio = new Audio(); sync.audio.preload = 'auto'; }
+  if (sync.url !== song.cur.url) { sync.audio.src = song.cur.url; sync.url = song.cur.url; }
+  return sync.audio;
+}
+
+// 映像の t 秒から曲を鳴らす（music が null なら止める）。曲の終わりを過ぎていれば鳴らさない
+export function musicPlay(music, t) {
+  const a = music && syncAudio();
+  if (!a) { musicPause(); return; }
+  stopPreview();
+  const pos = music.offset + t;
+  if (pos >= song.cur.duration - 0.05) { a.pause(); return; }
+  if (Math.abs(a.currentTime - pos) > 0.02) a.currentTime = pos;
+  musicLevel(music, t);
+  if (a.paused) a.play().catch((e) => { if (e.name !== 'AbortError') console.warn('曲を再生できませんでした', e); });
+}
+
+export function musicPause() {
+  if (sync.audio && !sync.audio.paused) sync.audio.pause();
+}
+
+// 曲が鳴っていれば、その位置を映像の時刻にして返す（鳴っていない・位置が定まらないときは null）
+export function musicTime(music) {
+  const a = sync.audio;
+  if (!music || !a || a.paused || a.seeking || a.readyState < 2 || !song.cur || sync.url !== song.cur.url) return null;
+  return a.currentTime - music.offset;
+}
+
+// 音量: 映像の最後の 2 拍で消していく（iOS の Safari は音量を変えられないので、そのまま終わる）
+export function musicLevel(music, t) {
+  if (!music || !sync.audio) return;
+  const v = t <= music.fadeFrom ? 1 : Math.max(0, (music.fadeTo - t) / (music.fadeTo - music.fadeFrom));
+  if (Math.abs(sync.audio.volume - v) > 1e-3) sync.audio.volume = v;
 }
 
 // ---------------------------------------------------------------- 表示

@@ -23,6 +23,7 @@ import { OPENERS } from './fx/openers.js';
 import { CLOSERS } from './fx/closers.js';
 import { AVOID_DECOR } from './fx/rules.js';
 import { PALETTES } from './fx/palettes.js';
+import { nextDownbeat } from './music.js';
 
 export { THEMES, STYLE_KEYS, VARIANT_KEYS };
 
@@ -73,8 +74,13 @@ export function buildFilm(opts) {
   }
   const workThemes = workThemeNames.map((k) => THEMES[k]);
   const P = PACE[pace] || PACE.normal;
-  const bpm = Math.round(rng.range(theme.bpm[0], theme.bpm[1]) + P.bpm);
+  // テンポ: スタイルの範囲から抽選。曲があるときは曲の BPM（倍・半分のうち抽選したテンポに近い方）にする
+  // （曲があっても抽選はする。乱数の並びを曲の有無で変えないため）
+  const styleBpm = Math.round(rng.range(theme.bpm[0], theme.bpm[1]) + P.bpm);
+  const tempo = opts.music ? fitTempo(opts.music, styleBpm, pace, works.length) : null;
+  const bpm = tempo ? tempo.bpm : styleBpm;
   const beat = 60 / bpm;
+  const workBeats = tempo ? tempo.workBeats : P.beats;
   const minDim = Math.min(W, H);
   const events = [];
   const segments = [];
@@ -132,7 +138,7 @@ export function buildFilm(opts) {
   const varKeys = [];
   const decorKeys = [];
   works.forEach((work, idx) => {
-    const D = beat * P.beats;
+    const D = beat * workBeats;
     const start = cursor;
     const srng = rng.fork('work' + idx);
     // opts.variant はテスト・デバッグ用（全作品を指定の振付に固定）
@@ -181,6 +187,8 @@ export function buildFilm(opts) {
   }
 
   const duration = cursor;
+  // 曲: 映像の t 秒 = 曲の offset + t 秒。オープニングの終わり（最初の作品）が曲の小節の頭に来る。最後の 2 拍で音を消す
+  const music = tempo ? { offset: nextDownbeat(opts.music.grid, segments[0].dur) - segments[0].dur, fadeFrom: duration - beat * 2, fadeTo: duration } : null;
 
   // ---- 境界ごとのトランジション固有パラメータ（注目点・演出用の色・イベント）
   for (let i = 0; i < segments.length - 1; i++) {
@@ -307,9 +315,43 @@ export function buildFilm(opts) {
   function dispose() { /* テキストは TextFactory 側で一括破棄 */ }
 
   return {
-    duration, bpm, beat, theme: themeName, baseTheme: baseName, workThemes: workThemeNames, opener: openerKey, closer: closerKey, segments, events, render, dispose,
+    duration, bpm, beat, music, theme: themeName, baseTheme: baseName, workThemes: workThemeNames, opener: openerKey, closer: closerKey, segments, events, render, dispose,
     summary: segments.map((s) => ({ kind: s.kind, theme: s.theme, start: s.start, dur: s.dur, variant: s.variant, decor: s.decor, palette: s.palette, out: s.outT && s.outT.type })),
   };
+}
+
+// ---------------------------------------------------------------- 曲に合わせる
+
+const OPENER_BEATS = 6, CLOSER_BEATS = 8; // オープニング・エンディングの拍数（openers.js / closers.js）
+const MIN_WORK_SEC = 2.4; // 作品 1 枚の最短の秒数（見せ方の動きが収まる長さ。曲がないときの最短とほぼ同じ）
+
+/**
+ * 曲に合わせたテンポと作品あたりの拍数
+ * @param {{ grid: { bpm: number, beat: number, first: number, bar: number }, duration: number }} music 曲の拍の格子と長さ（秒）
+ * @param {number} styleBpm スタイルから抽選したテンポ
+ * @param {string} pace 'tight' | 'normal' | 'relaxed'
+ * @param {number} n 作品の数
+ * @returns {{ bpm: number, workBeats: number }}
+ */
+export function fitTempo(music, styleBpm, pace, n) {
+  const { grid } = music;
+  // 曲の BPM の倍・半分のうち、スタイルのテンポにいちばん近いもの
+  const dist = (m) => Math.abs(Math.log2((grid.bpm * m) / styleBpm));
+  const m = [1, 0.5, 2].reduce((a, b) => (dist(b) < dist(a) - 1e-9 ? b : a));
+  const bpm = grid.bpm * m, beat = 60 / bpm;
+  // 作品の切り替えが曲の小節の頭に来るよう、作品の拍数は小節（映像の拍で 4m 拍）の倍数にする。
+  // 「きびきび」だけは半小節きざみも使う（小節単位だと「ふつう」と同じ長さになりやすいため）
+  const unit = 4 * m * (pace === 'tight' ? 0.5 : 1);
+  const P = PACE[pace] || PACE.normal;
+  const target = (P.beats * 60) / styleBpm; // 曲がないときの 1 枚の秒数
+  const minK = Math.max(1, Math.ceil(MIN_WORK_SEC / (unit * beat) - 1e-9));
+  let k = Math.max(minK, Math.round(target / (unit * beat)));
+  const open = OPENER_BEATS * beat;
+  const offset = nextDownbeat(grid, open) - open;
+  // 曲が映像より短ければ、作品の拍数を減らして曲の中に収める（最短でも収まらなければそのまま。曲が終わったあとは無音）
+  const fits = (k) => offset + (OPENER_BEATS + n * k * unit + CLOSER_BEATS) * beat <= music.duration + 1e-6;
+  while (k > minK && !fits(k)) k--;
+  return { bpm, workBeats: k * unit };
 }
 
 // 常駐 HUD: 作家名・通し番号・進行ティック

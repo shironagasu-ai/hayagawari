@@ -27,7 +27,7 @@ node tools/check-version.mjs    # src/version.js・package.json・CHANGELOG.md �
 ```
 index.html          … UI（編集画面・プレイヤー・演出カタログ）
 src/main.js         … UI の配線・メインループ・書き出しダイアログ
-src/director.js     … シードから映像の設計図を作り、時刻 t の絵を描く（演出の抽選・つなぎ・HUD）
+src/director.js     … シードから映像の設計図を作り、時刻 t の絵を描く（演出の抽選・つなぎ・HUD・曲に合わせたテンポと長さ）
 src/fx/             … 演出そのもの（themes / openers / closers / variants / transitions / decors / palettes、共通部品 bookend-kit）
 src/fx/labels.js    … 演出の表示名と説明（カタログと詳細設定のボタンに使う）
 src/catalog.js      … 演出カタログ（#catalog）
@@ -39,7 +39,7 @@ src/export.js       … 1 コマずつの書き出し（WebCodecs → MP4。音�
 src/store.js        … 作業の保存（IndexedDB）
 src/music.js        … 曲の解析（テンポ・拍・小節の頭の推定、タップでの補正。decodeSong 以外は DOM を使わず Node でも動く）
 src/music-worker.js … 曲の解析を Worker で動かす入口
-src/song.js         … 曲の欄の UI（選ぶ・試聴・手直し・保存）
+src/song.js         … 曲の欄の UI（選ぶ・試聴・手直し・保存）と、プレーヤーでの曲の同期再生（musicPlay / musicTime）
 src/version.js      … バージョン・ビルド情報・プレビュー判定・保存キー
 src/text.js         … 文字のテクスチャ化
 src/ease.js         … イージング（タメツメ用の cubic-bezier / 予備動作付き加速など）
