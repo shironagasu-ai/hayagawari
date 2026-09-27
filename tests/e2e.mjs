@@ -208,8 +208,8 @@ async function sheet(page, file, rows) {
   await sheet(page, 'sheet-variants.png', vKeys.map((k) => ({ key: 'variant', value: k, seg: 1, times: T })));
   const picked = await page.evaluate(() => { const f = window.__hg.state.film; return [f.opener, f.closer, f.segments[1].variant]; });
   check('opener/closer/variant overrides applied', picked[0] === opKeys[opKeys.length - 1] && picked[1] === clKeys[clKeys.length - 1] && picked[2] === vKeys[vKeys.length - 1], picked.join(','));
-  // 縦長（9:16・3:4）と 4:3 でも崩れないか目視確認用
-  for (const asp of ['9:16', '4:3', '3:4']) {
+  // 縦長（9:16・3:4）と 4:3 でも崩れないか目視確認用。E2E_ASPECT_SHEETS=0 で省く（CI の Chrome 側。描けるかどうかは 9 の全演出チェックで見ている）
+  for (const asp of process.env.E2E_ASPECT_SHEETS === '0' ? [] : ['9:16', '4:3', '3:4']) {
     const tag = asp.replace(':', 'x');
     await page.evaluate((a) => { window.__hg.setOpt('aspect', a); window.__hg.resize(); }, asp);
     await sheet(page, `sheet-openers-${tag}.png`, opKeys.map((k) => ({ key: 'opener', value: k, seg: 0, times: T })));

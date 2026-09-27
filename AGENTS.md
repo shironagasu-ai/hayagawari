@@ -19,7 +19,7 @@ npm test                        # E2E（tests/e2e.mjs）。Chromium の実体は
 node tools/check-version.mjs    # src/version.js・package.json・CHANGELOG.md のバージョンが一致しているか
 ```
 
-- E2E のスクリーンショット・見本シート（`sheet-*.png`。比率違いは `*-9x16.png`・`*-4x3.png`・`*-3x4.png`）・書き出した動画は `tests/output/` に出る（git には入れない）
+- E2E のスクリーンショット・見本シート（`sheet-*.png`。比率違いは `*-9x16.png`・`*-4x3.png`・`*-3x4.png`）・書き出した動画は `tests/output/` に出る（git には入れない）。比率違いの見本シートは `E2E_ASPECT_SHEETS=0` で省ける（CI の Chrome 側はこれで短縮している）
 - 変更したら `npm test` が全件通ることを確認してからプッシュする
 
 ## 構成
