@@ -208,11 +208,14 @@ async function sheet(page, file, rows) {
   await sheet(page, 'sheet-variants.png', vKeys.map((k) => ({ key: 'variant', value: k, seg: 1, times: T })));
   const picked = await page.evaluate(() => { const f = window.__hg.state.film; return [f.opener, f.closer, f.segments[1].variant]; });
   check('opener/closer/variant overrides applied', picked[0] === opKeys[opKeys.length - 1] && picked[1] === clKeys[clKeys.length - 1] && picked[2] === vKeys[vKeys.length - 1], picked.join(','));
-  // 縦長（9:16）でも崩れないか目視確認用
-  await page.evaluate(() => { window.__hg.setOpt('aspect', '9:16'); window.__hg.resize(); });
-  await sheet(page, 'sheet-openers-9x16.png', opKeys.map((k) => ({ key: 'opener', value: k, seg: 0, times: T })));
-  await sheet(page, 'sheet-closers-9x16.png', clKeys.map((k) => ({ key: 'closer', value: k, seg: 'last', times: T })));
-  await sheet(page, 'sheet-variants-9x16.png', vKeys.map((k) => ({ key: 'variant', value: k, seg: 1, times: T })));
+  // 縦長（9:16・3:4）と 4:3 でも崩れないか目視確認用
+  for (const asp of ['9:16', '4:3', '3:4']) {
+    const tag = asp.replace(':', 'x');
+    await page.evaluate((a) => { window.__hg.setOpt('aspect', a); window.__hg.resize(); }, asp);
+    await sheet(page, `sheet-openers-${tag}.png`, opKeys.map((k) => ({ key: 'opener', value: k, seg: 0, times: T })));
+    await sheet(page, `sheet-closers-${tag}.png`, clKeys.map((k) => ({ key: 'closer', value: k, seg: 'last', times: T })));
+    await sheet(page, `sheet-variants-${tag}.png`, vKeys.map((k) => ({ key: 'variant', value: k, seg: 1, times: T })));
+  }
   await page.evaluate(() => { window.__hg.setOpt('aspect', '16:9'); window.__hg.resize(); });
   check('9 choreographies available', vKeys.length >= 9, vKeys.join(','));
   // おまかせで出うるか: 見せ方・切り替え・背景の飾り・配色は、どれか 1 つ以上のスタイルで重みが付いていること
@@ -647,6 +650,7 @@ async function sheet(page, file, rows) {
   const inPlayer = () => page.evaluate(() => document.body.classList.contains('playing'));
   await page.click('#go');
   check('back button visible in player', await page.evaluate(() => document.querySelector('#back').checkVisibility()));
+  check('fullscreen button shown where supported', await page.evaluate(() => document.querySelector('#fs').checkVisibility()));
   // 操作が隠れるまで待つ → 戻るは薄く残り、画面のタップでは止まらず操作が出る
   await page.waitForFunction(() => document.body.classList.contains('idle'), null, { timeout: 10000 });
   await page.waitForTimeout(500); // 薄くなるアニメーションが終わるまで
@@ -774,6 +778,106 @@ async function sheet(page, file, rows) {
   await page.close();
 }
 
+// ---- 12. 詳細設定からカタログへ／全画面に対応していないブラウザでは全画面ボタンを出さない
+{
+  const { page, errors } = await openPage({ width: 1280, height: 800 });
+  await page.evaluate(() => window.__hg.setAdvOpen(true));
+  const links = await page.evaluate(() => [...document.querySelectorAll('#adv a.cat-link')].map((a) => a.getAttribute('href')));
+  check('advanced settings link to the catalog', JSON.stringify(links) === JSON.stringify(['#catalog=style', '#catalog=opener', '#catalog=closer']), links.join(','));
+  await page.click('#adv a[href="#catalog=closer"]');
+  await page.waitForFunction(() => !document.querySelector('#catalog').hidden, null, { timeout: 10000 });
+  check('catalog link opens that category', await page.evaluate(() => window.__hg.catalog.current === 'closer'));
+  await page.click('#cat-back');
+  await page.waitForFunction(() => document.querySelector('#catalog').hidden, null, { timeout: 10000 });
+  check('back from catalog keeps advanced settings open', await page.evaluate(() => document.querySelector('#adv').open && window.__hg.state.advOpen));
+  check('no page errors (catalog links)', errors.length === 0, errors.join('\n'));
+  await page.close();
+  // iPhone の Safari 相当（ページの全画面に対応していない）
+  const ip = await browser.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+  await ip.addInitScript(() => {
+    for (const k of ['fullscreenEnabled', 'webkitFullscreenEnabled']) Object.defineProperty(Document.prototype, k, { get: () => false, configurable: true });
+  });
+  await ip.goto('http://localhost:8941/', { waitUntil: 'networkidle' });
+  await ip.waitForFunction(() => window.__hg, null, { timeout: 30000 });
+  check('fullscreen button hidden where unsupported (iPhone)', await ip.evaluate(() => document.querySelector('#fs').hidden));
+  await ip.close();
+}
+
+// ---- 13. 作品の並べ替え: マウスはカードを掴んで動かす／タッチは番号札か長押し／隙間や最後尾にも落とせる／クリックは注目点エディタ
+{
+  const names = (page) => page.evaluate(() => window.__hg.state.works.map((w) => w.name));
+  const center = (page, sel) => page.evaluate((s) => { const r = document.querySelector(s).getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2, r: r.right, b: r.bottom }; }, sel);
+  const { page, errors } = await openPage({ width: 1280, height: 900 });
+  await page.evaluate(() => window.__hg.loadSamples());
+  await page.waitForFunction(() => window.__hg.state.works.length === 6, null, { timeout: 30000 });
+  await page.evaluate(() => document.querySelector('#works').scrollIntoView({ block: 'center' }));
+  const n0 = await names(page);
+  // マウス: 1 枚目のサムネイルを掴んで 3 枚目の右半分へ → 3 枚目の後ろ
+  const a = await center(page, '#works .work:nth-child(1) .thumb');
+  const c = await center(page, '#works .work:nth-child(3) .thumb');
+  await page.mouse.move(a.x, a.y); await page.mouse.down();
+  await page.mouse.move(a.x + 20, a.y, { steps: 3 });
+  const ghost = await page.evaluate(() => !!document.querySelector('.sort-ghost') && document.querySelector('.work.sort-hole') !== null);
+  await page.mouse.move(c.x + 30, c.y, { steps: 8 });
+  await page.mouse.up();
+  const n1 = await names(page);
+  check('mouse drag: ghost follows while dragging', ghost);
+  check('mouse drag reorders (1st → after 3rd)', JSON.stringify(n1) === JSON.stringify([n0[1], n0[2], n0[0], n0[3], n0[4], n0[5]]), n1.join(','));
+  check('mouse drag does not open the focal editor', await page.evaluate(() => document.querySelector('#fe').hidden));
+  // 最後尾の右の隙間に落とせる
+  const last = await center(page, '#works .work:nth-child(6) .thumb');
+  const b0 = await center(page, '#works .work:nth-child(2) .thumb');
+  await page.mouse.move(b0.x, b0.y); await page.mouse.down();
+  await page.mouse.move(last.r + 40, last.y, { steps: 10 });
+  await page.mouse.up();
+  const n2 = await names(page);
+  check('drop after the last card', n2[5] === n1[1], n2.join(','));
+  // 動かさずに離す＝クリックで注目点エディタが開く
+  await page.click('#works .work:nth-child(1) .thumb');
+  check('click still opens the focal editor', await page.evaluate(() => !document.querySelector('#fe').hidden));
+  await page.evaluate(() => document.querySelector('#fe-close') ? document.querySelector('#fe-close').click() : null);
+  check('order saved to state and numbers updated', await page.evaluate(() => [...document.querySelectorAll('#works .grip')].map((g) => g.textContent.trim()).join(',') === '⠿ 01,⠿ 02,⠿ 03,⠿ 04,⠿ 05,⠿ 06'));
+  check('no page errors (reorder mouse)', errors.length === 0, errors.join('\n'));
+  await page.close();
+
+  // タッチ（スマホ）: 長押しで掴む／すぐ動かせばスクロール／番号札はすぐ掴める
+  const t = await openPage({ width: 390, height: 844 }, '', { hasTouch: true, isMobile: true });
+  await t.page.evaluate(() => window.__hg.loadSamples());
+  await t.page.waitForFunction(() => window.__hg.state.works.length === 6, null, { timeout: 30000 });
+  await t.page.evaluate(() => document.querySelector('#works').scrollIntoView({ block: 'center' }));
+  const cdp = await t.page.context().newCDPSession(t.page);
+  const touch = (type, x, y) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x, y }] });
+  const drag = async (from, to, hold) => {
+    await touch('touchStart', from.x, from.y);
+    if (hold) await t.page.waitForTimeout(hold);
+    for (let k = 1; k <= 10; k++) { await touch('touchMove', from.x + ((to.x - from.x) * k) / 10, from.y + ((to.y - from.y) * k) / 10); await t.page.waitForTimeout(16); }
+    await touch('touchEnd');
+    await t.page.waitForTimeout(100);
+  };
+  const m0 = await names(t.page);
+  const p1 = await center(t.page, '#works .work:nth-child(1) .thumb');
+  const p4 = await center(t.page, '#works .work:nth-child(4) .thumb');
+  await drag(p1, { x: p4.x + 25, y: p4.y }, 450);
+  const m1 = await names(t.page);
+  check('touch long-press drag reorders', JSON.stringify(m1) === JSON.stringify([m0[1], m0[2], m0[3], m0[0], m0[4], m0[5]]), m1.join(','));
+  const scroll0 = await t.page.evaluate(() => document.querySelector('#editor').scrollTop);
+  const q1 = await center(t.page, '#works .work:nth-child(1) .thumb');
+  await drag(q1, { x: q1.x, y: q1.y - 200 }, 0);
+  const m2 = await names(t.page);
+  check('touch quick swipe scrolls instead of reordering', JSON.stringify(m2) === JSON.stringify(m1) && await t.page.evaluate(() => !document.querySelector('.sort-ghost')), `${scroll0} ${m2.join(',')}`);
+  // スワイプの慣性スクロールが止まるのを待ってから位置を測る（実際の Chrome は慣性で少し流れ続ける）
+  await t.page.waitForFunction(() => new Promise((res) => { const ed = document.querySelector('#editor'); const a = ed.scrollTop; setTimeout(() => res(ed.scrollTop === a), 250); }), null, { timeout: 10000, polling: 300 });
+  await t.page.evaluate(() => document.querySelector('#works').scrollIntoView({ block: 'center' }));
+  await t.page.waitForTimeout(300);
+  const g1 = await center(t.page, '#works .work:nth-child(1) .grip');
+  const q2 = await center(t.page, '#works .work:nth-child(2) .thumb');
+  await drag(g1, { x: q2.x + 25, y: q2.y }, 0);
+  const m3 = await names(t.page);
+  check('touch drag from the number tag works without long-press', m3[1] === m2[0], m3.join(','));
+  check('no page errors (reorder touch)', t.errors.length === 0, t.errors.join('\n'));
+  await t.page.close();
+}
+
 // ---- 6. トップ: 作例動画・ロゴ・ボタン
 for (const [name, vp, file] of [['desktop', { width: 1440, height: 900 }, 'hero-16x9'], ['phone', { width: 390, height: 844 }, 'hero-9x16']]) {
   const { page, errors } = await openPage(vp);
@@ -791,6 +895,12 @@ for (const [name, vp, file] of [['desktop', { width: 1440, height: 900 }, 'hero-
   check(`logo built and fits (${name})`, hero.layers === 20 && hero.logoW <= hero.viewW, `${hero.logoW.toFixed(0)} <= ${hero.viewW}`);
   const poster = await page.evaluate((f) => fetch(`assets/hero/${f}.jpg`).then((r) => r.ok && r.headers.get('content-type')), file);
   check(`hero poster served (${name})`, poster === 'image/jpeg', String(poster));
+  if (name === 'desktop') {
+    // ボタンはトップにだけ。ドロップ欄は押すとファイルを選べる（プレーヤーを開く前に確かめる）
+    check('drop zone has no duplicate buttons', await page.evaluate(() => !document.querySelector('#drop button') && document.querySelectorAll('#hero-pick, #hero-sample').length === 2));
+    const [chooser] = await Promise.all([page.waitForEvent('filechooser', { timeout: 10000 }), page.click('#drop')]);
+    check('clicking the drop zone opens the file picker', chooser.isMultiple());
+  }
   // H.264 を再生できるブラウザ（一般配布の Chrome 等）では実際に動いていること、映像の再生中は止まること
   if (hero.h264) {
     await page.waitForFunction(() => document.querySelector('#hero-video').currentTime > 0.5, null, { timeout: 30000 });

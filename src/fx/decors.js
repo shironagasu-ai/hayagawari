@@ -33,8 +33,7 @@ export const DECORS = {
   // 流れる巨大アウトライン文字の帯
   marquee(S) {
     const { tf, theme, W, H, work, artist, rng } = S;
-    const up = (s) => (theme.upper ? s.toUpperCase() : s);
-    const str = ` ${up(artist || 'PORTFOLIO')} — ${up(work.title)} —`;
+    const str = ` ${artist || 'PORTFOLIO'} — ${work.title} —`;
     const size = Math.round(Math.min(W, H) * 0.15);
     const T = tf.get(str, { family: theme.font, size, weight: 900, stroke: Math.max(1.5, size * 0.012) });
     const rows = W > H ? 3 : 4;
@@ -135,10 +134,9 @@ export const DECORS = {
   },
   // 上端を流れる細いテロップ（作品名・番号・年）
   ticker(S) {
-    const { tf, theme, W, H, work, idx, total, year, minDim } = S;
-    const up = (s) => (theme.upper ? s.toUpperCase() : s);
+    const { tf, theme, W, H, work, idx, total, minDim } = S;
     const fs = Math.round(minDim * 0.015);
-    const T = tf.get(`${up(work.title)}   ·   No.${pad2(idx + 1)} / ${pad2(total)}   ·   ${year}   ·   `, { family: 'mono', size: fs, weight: 600, tracking: 0.2 });
+    const T = tf.get(`${work.title}   ·   No.${pad2(idx + 1)} / ${pad2(total)}   ·   `, { family: 'mono', size: fs, weight: 600, tracking: 0.2 });
     const tw = Math.max(1, textW(T));
     const y = minDim * 0.11;
     const bh = fs * 2.2;

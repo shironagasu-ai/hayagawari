@@ -66,11 +66,14 @@
   #drop {
     margin-top: 28px; border: 1.5px dashed #3a3a42; border-radius: 14px; padding: 28px 20px;
     display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center;
-    transition: border-color 0.15s, background 0.15s;
+    transition: border-color 0.15s, background 0.15s; cursor: pointer;
   }
+  #drop:hover, #drop:focus-visible { border-color: #5a5a64; background: rgba(255, 255, 255, 0.025); outline: none; }
+  #drop .pick { font-size: 13px; color: var(--ink); text-decoration: underline; text-underline-offset: 4px; text-decoration-color: var(--line); }
   #drop.over { border-color: var(--accent); background: rgba(255, 75, 62, 0.06); }
   #drop .big { font-size: 18px; font-weight: 700; }
   #drop .small { font-size: 12px; color: var(--sub); }
+  #drop .small span { display: inline-block; } /* まとまりの途中で折り返さない */
   .row { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
   .btn {
     border: 1px solid var(--line); background: var(--panel); border-radius: 999px;
@@ -85,8 +88,11 @@
 
   #works { margin-top: 24px; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px; }
   .work { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; position: relative; }
-  .work.dragging { opacity: 0.4; }
-  .work.dropbefore { box-shadow: -4px 0 0 var(--accent); }
+  .work { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  .work input.title { -webkit-user-select: text; user-select: text; }
+  .work.sort-hole { opacity: 0.25; border-style: dashed; border-color: var(--accent); }
+  .sort-ghost { position: fixed; left: 0; top: 0; z-index: 60; margin: 0; pointer-events: none; opacity: 0.95; box-shadow: 0 14px 40px rgba(0,0,0,0.55); border-color: var(--accent); }
+  body.sorting, body.sorting * { cursor: grabbing !important; }
   .work .thumb { position: relative; aspect-ratio: 1; background: #000 center/contain no-repeat; cursor: pointer; }
   .work .thumb::after {
     content: "注目点を編集"; position: absolute; left: 50%; bottom: 8px; transform: translateX(-50%);
@@ -136,7 +142,7 @@
   .work input.title:hover { border-bottom-color: var(--sub); }
   .work input.title:focus { outline: none; border-bottom: 1px solid var(--accent); }
   .work .x { position: absolute; top: 6px; right: 6px; width: 24px; height: 24px; border-radius: 50%; border: none; background: rgba(0,0,0,0.65); font-size: 13px; line-height: 24px; }
-  .work .grip { position: absolute; top: 6px; left: 6px; font-size: 11px; padding: 2px 6px; border-radius: 6px; background: rgba(0,0,0,0.65); cursor: grab; font-family: var(--mono); }
+  .work .grip { position: absolute; top: 6px; left: 6px; font-size: 12px; padding: 6px 10px; border-radius: 8px; background: rgba(0,0,0,0.65); cursor: grab; font-family: var(--mono); touch-action: none; z-index: 1; }
   .hint { margin-top: 10px; font-size: 12px; color: var(--sub); }
   .works-bar { margin-top: 12px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
   .works-bar[hidden] { display: none; }
@@ -264,6 +270,9 @@
   #seek .track { position: absolute; left: 0; right: 0; top: 8px; height: 3px; background: rgba(255,255,255,0.2); border-radius: 2px; }
   #seek .fill { position: absolute; left: 0; top: 8px; height: 3px; width: 100%; background: var(--accent); transform-origin: 0 0; border-radius: 2px; }
   #seek .mark { position: absolute; top: 5px; width: 1px; height: 9px; background: rgba(255,255,255,0.45); }
+  .field label .cat-link { margin-left: 10px; color: var(--accent); letter-spacing: 0.04em; text-decoration: none; white-space: nowrap; }
+  .field label .cat-link:hover { text-decoration: underline; }
+  #fs[hidden] { display: none; }
   .controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .controls .btn { padding: 8px 14px; font-size: 12px; background: rgba(20,20,23,0.8); }
   .controls .info { font-family: var(--mono); font-size: 11px; color: #bdbab3; letter-spacing: 0.08em; margin-right: auto; display: flex; gap: 14px; flex-wrap: wrap; }
@@ -326,22 +335,19 @@
   </header>
   <div class="wrap">
 
-    <div id="drop">
+    <div id="drop" role="button" tabindex="0" aria-label="イラストを選ぶ（ドロップも可）">
       <div class="big">イラストをドロップ</div>
-      <div class="small">PNG / JPG / WebP ・ 複数可 ・ 2〜12枚くらいがおすすめ</div>
-      <div class="row">
-        <button class="btn" id="pick">ファイルを選ぶ</button>
-        <button class="btn" id="sample">サンプルで試す</button>
-      </div>
-      <input type="file" id="file" accept="image/*" multiple>
+      <div class="pick">またはここを押して選ぶ</div>
+      <div class="small"><span>PNG / JPG / WebP ・ 複数可</span> ・ <span>2〜12枚くらいがおすすめ</span></div>
     </div>
+    <input type="file" id="file" accept="image/*" multiple hidden>
 
     <div id="works"></div>
     <div class="works-bar" id="works-bar" hidden>
       <span class="hint">作業内容はこのブラウザに自動で保存され、次に開いたときに元に戻ります（外部には送信しません）</span>
       <button class="btn" id="clear-works">すべて外す</button>
     </div>
-    <div class="hint" id="works-hint" hidden>作品名はカードの下で書き換えられます。丸は注目点（番号＝優先順。1番が一番見せたい箇所）で、サムネイルをタップすると編集できます（赤＝自動検出、緑＝手動）。カードのドラッグで並べ替え。作品名と注目点は、詳細設定を閉じていても映像に反映されます。</div>
+    <div class="hint" id="works-hint" hidden>作品名はカードの下で書き換えられます。丸は注目点（番号＝優先順。1番が一番見せたい箇所）で、サムネイルをタップすると編集できます（赤＝自動検出、緑＝手動）。並べ替えはカードをドラッグ（スマホは左上の番号札をドラッグするか、カードを長押し）。作品名と注目点は、詳細設定を閉じていても映像に反映されます。</div>
 
     <div class="grid-form">
       <div class="field">
@@ -359,7 +365,7 @@
       <div class="field">
         <label>ASPECT / 画面比率</label>
         <div class="seg" id="aspect">
-          <button data-v="16:9" class="on">16:9</button><button data-v="9:16">9:16</button><button data-v="1:1">1:1</button>
+          <button data-v="16:9" class="on">16:9</button><button data-v="4:3">4:3</button><button data-v="1:1">1:1</button><button data-v="3:4">3:4</button><button data-v="9:16">9:16</button>
         </div>
       </div>
       <div class="field wide" id="song-field">
@@ -402,19 +408,19 @@
         </div>
       </div>
       <div class="field">
-        <label>STYLE / スタイル</label>
+        <label>STYLE / スタイル<a class="cat-link" href="#catalog=style">カタログで見る →</a></label>
         <div class="seg" id="style">
           <button data-v="auto" class="on">おまかせ</button>
         </div>
       </div>
       <div class="field">
-        <label>OPENING / オープニング</label>
+        <label>OPENING / オープニング<a class="cat-link" href="#catalog=opener">カタログで見る →</a></label>
         <div class="seg" id="opener">
           <button data-v="auto" class="on">おまかせ</button>
         </div>
       </div>
       <div class="field">
-        <label>ENDING / エンディング</label>
+        <label>ENDING / エンディング<a class="cat-link" href="#catalog=closer">カタログで見る →</a></label>
         <div class="seg" id="closer">
           <button data-v="auto" class="on">おまかせ</button>
         </div>

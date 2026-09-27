@@ -1,6 +1,6 @@
 // オープニングのパターン。
 // 各パターンは C（共通コンテキスト）を受け取り { dur, draw(r, t, col) } を返す。
-// C: { works, W, H, beat, rng, tf, theme, minDim, artist, subline, handle, year, up, ev(t, kind, amt, dur, color) }
+// C: { works, W, H, beat, rng, tf, theme, minDim, artist, subline, handle, ev(t, kind, amt, dur, color) }
 
 import { clamp, lerp, prog, expoOut, backOut, snap, antic } from '../ease.js';
 import {
@@ -29,7 +29,7 @@ export const OPENERS = {
     const SUB = subText(C);
     const CT = tf.get(`${pad2(works.length)} WORKS`, { family: 'mono', size: Math.round(minDim * 0.02), weight: 600, tracking: 0.25 });
     // 点滅ラベル: サブタイトルがあればそれ、なければ作品数（勝手な文言は入れない）
-    const LT = tf.get(C.subline ? C.up(C.subline) : `${pad2(works.length)} WORKS`, { family: 'mono', size: Math.round(minDim * 0.02), weight: 600, tracking: 0.4 });
+    const LT = tf.get(C.subline || `${pad2(works.length)} WORKS`, { family: 'mono', size: Math.round(minDim * 0.02), weight: 600, tracking: 0.4 });
     for (let i = 1; i < mont; i++) C.ev(i * montDur, 'flash', 0.12, 0.08);
     C.ev(tName, 'flash', 0.6, 0.22);
     C.ev(tName, 'shake', 8, 0.3);
@@ -63,9 +63,9 @@ export const OPENERS = {
 
   // 1文字ずつ拍に乗せて打ち込む
   type(C) {
-    const { W, H, beat, tf, theme, minDim, up, artist } = C;
+    const { W, H, beat, tf, theme, minDim, artist } = C;
     const D = beat * 6;
-    const str = up(artist || 'PORTFOLIO');
+    const str = artist || 'PORTFOLIO';
     const chars = Array.from(str);
     const size = Math.round(minDim * (W > H ? 0.16 : 0.13));
     const opt = { family: theme.font, size, weight: Math.min(900, theme.weight + 100), tracking: 0 };
@@ -313,7 +313,7 @@ export const OPENERS = {
 
   // 端末風の起動ログ。作品を1行ずつ読み込み、右に寄りが切り替わる
   boot(C) {
-    const { works, W, H, beat, rng, tf, minDim, up } = C;
+    const { works, W, H, beat, rng, tf, minDim } = C;
     const D = beat * 6;
     const fs = Math.round(minDim * 0.022);
     const opt = { family: 'mono', size: fs, weight: 600, tracking: 0.06 };
@@ -321,7 +321,7 @@ export const OPENERS = {
     const lines = [
       tf.get('> BOOT SEQUENCE', opt),
       tf.get(`> LOADING ${pad2(works.length)} WORKS`, opt),
-      ...works.slice(0, maxRows).map((w, i) => tf.get(`  [${pad2(i + 1)}] ${up(w.title).slice(0, 22).padEnd(22, '.')} `, opt)),
+      ...works.slice(0, maxRows).map((w, i) => tf.get(`  [${pad2(i + 1)}] ${w.title.slice(0, 22).padEnd(22, '.')} `, opt)),
     ];
     if (works.length > maxRows) lines.push(tf.get(`  ... +${works.length - maxRows}`, opt));
     const OK = tf.get('OK', { ...opt, weight: 800 });
@@ -454,11 +454,11 @@ export const OPENERS = {
 
   // 名前を繰り返した帯が何段も逆向きに流れ、はけると名前
   marquee(C) {
-    const { works, W, H, beat, rng, tf, theme, minDim, up, artist } = C;
+    const { works, W, H, beat, rng, tf, theme, minDim, artist } = C;
     const D = beat * 6;
     const rows = W > H ? 5 : 8;
     const rh = H / rows;
-    const T = tf.get(`${up(artist || 'PORTFOLIO')}  /  `, { family: theme.font, size: Math.round(rh * 0.6), weight: Math.min(900, theme.weight + 100), tracking: theme.tracking });
+    const T = tf.get(`${artist || 'PORTFOLIO'}  /  `, { family: theme.font, size: Math.round(rh * 0.6), weight: Math.min(900, theme.weight + 100), tracking: theme.tracking });
     const tw = Math.max(1, textW(T));
     const bgs = [0, 1, 2].map((i) => {
       const w = works[i % works.length];

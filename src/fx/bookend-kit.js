@@ -7,8 +7,8 @@ import {
 } from '../kit.js';
 // 作家名（なければ PORTFOLIO）を横幅に収まる大きさで
 export function nameText(C, sizeFrac, maxWFrac, weightBoost = 100) {
-  const { tf, theme, minDim, W, up, artist } = C;
-  const T = tf.get(up(artist || 'PORTFOLIO'), {
+  const { tf, theme, minDim, W, artist } = C;
+  const T = tf.get(artist || 'PORTFOLIO', {
     family: theme.font, size: Math.round(minDim * sizeFrac),
     weight: Math.min(900, theme.weight + weightBoost), tracking: theme.tracking,
   });
@@ -17,9 +17,9 @@ export function nameText(C, sizeFrac, maxWFrac, weightBoost = 100) {
 
 // サブタイトル。未入力なら出さない（null）。自動で PORTFOLIO 等を補わない
 export function subText(C) {
-  const { tf, minDim, up, subline } = C;
+  const { tf, minDim, subline } = C;
   if (!subline) return null;
-  return tf.get(up(subline), { family: 'mono', size: Math.round(minDim * 0.024), weight: 600, tracking: 0.3 });
+  return tf.get(subline, { family: 'mono', size: Math.round(minDim * 0.024), weight: 600, tracking: 0.3 });
 }
 
 // 名前の着地（大見出し＋アクセント線＋サブ）。lt は着地からの経過秒

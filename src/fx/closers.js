@@ -408,7 +408,7 @@ export const CLOSERS = {
 
   // 映画のクレジットのように作品名が流れ、最後に名前
   credits(C) {
-    const { works, W, H, beat, tf, theme, minDim, up } = C;
+    const { works, W, H, beat, tf, theme, minDim } = C;
     const D = beat * 8;
     const rh = minDim * (W > H ? 0.15 : 0.12);
     const thW = rh * 1.2, thH = rh * 0.8;
@@ -416,7 +416,7 @@ export const CLOSERS = {
     const opt = { family: theme.font, size: Math.round(minDim * 0.036), weight: theme.weight, tracking: theme.tracking };
     const rows = works.map((w, i) => {
       const f = w.focal[0] || { x: 0.5, y: 0.5 };
-      const TT = tf.get(up(w.title), opt);
+      const TT = tf.get(w.title, opt);
       return {
         w, uv: coverUV(w, thW, thH, f.x, f.y, 1.15), TT, ts: Math.min(1, (W * 0.42) / Math.max(1, textW(TT))),
         NO: tf.get(`No.${pad2(i + 1)}`, { family: 'mono', size: Math.round(minDim * 0.018), weight: 700, tracking: 0.18 }),
@@ -559,9 +559,9 @@ export const CLOSERS = {
 
   // 駅の発車標のようなパタパタ表示で名前が 1 文字ずつ止まる
   flap(C) {
-    const { works, W, H, beat, rng, tf, theme, minDim, up, artist } = C;
+    const { works, W, H, beat, rng, tf, theme, minDim, artist } = C;
     const D = beat * 8;
-    const chars = Array.from(up(artist || 'PORTFOLIO'));
+    const chars = Array.from(artist || 'PORTFOLIO');
     const n = chars.length;
     const cw = Math.min((W * 0.9) / n, minDim * 0.15), ch = cw * 1.45;
     const opt = { family: theme.font, size: Math.round(ch * 0.62), weight: Math.min(900, theme.weight + 100) };
@@ -673,7 +673,7 @@ export const CLOSERS = {
 
   // 写真がプリンタからジジジと出てきて現像され、余白に名前
   print(C) {
-    const { works, W, H, beat, tf, theme, minDim, up, artist } = C;
+    const { works, W, H, beat, tf, theme, minDim, artist } = C;
     const D = beat * 8;
     const w = works[works.length - 1];
     const f = w.focal[0] || { x: 0.5, y: 0.5, size: 0.4 };
@@ -686,7 +686,7 @@ export const CLOSERS = {
     const slotY = H * (land ? 0.1 : 0.13);
     const tPrint = beat * 2.5;
     const paper = [0.96, 0.95, 0.92], inkC = [0.13, 0.13, 0.15];
-    const NT = tf.get(up(artist || 'PORTFOLIO'), { family: theme.font, size: Math.round(foot * 0.36), weight: Math.min(900, theme.weight + 100), tracking: theme.tracking });
+    const NT = tf.get(artist || 'PORTFOLIO', { family: theme.font, size: Math.round(foot * 0.36), weight: Math.min(900, theme.weight + 100), tracking: theme.tracking });
     const ns = Math.min(1, (pw * 0.92) / Math.max(1, textW(NT)));
     const E = endingText(C);
     const HS = C.handle ? tf.get(C.handle, { family: 'mono', size: Math.round(foot * 0.14), weight: 700, tracking: 0.1 }) : null;
