@@ -535,6 +535,14 @@ async function sheet(page, file, rows) {
   const info = await page.textContent('#xp-info');
   console.log('export info:', info.replace(/\s+/g, ' ').slice(0, 160));
   check('frame export available', info.includes('1コマずつ'), info);
+  // 解像度: 540p・720p・1080p・4K（16:9 ではそれぞれ 960×540 / 1280×720 / 1920×1080 / 3840×2160）
+  const sizes = [];
+  for (const v of ['540', '720', '2160', '1080']) {
+    await page.click(`#xp-res button[data-v="${v}"]`);
+    await page.waitForFunction(() => !document.querySelector('#xp-info').textContent.includes('判定中'));
+    sizes.push(((await page.textContent('#xp-info')).match(/(\d+)×(\d+)/) || [])[0]);
+  }
+  check('export sizes 540p / 720p / 4K / 1080p', JSON.stringify(sizes) === JSON.stringify(['960×540', '1280×720', '3840×2160', '1920×1080']), JSON.stringify(sizes));
   const noSoundUi = await page.evaluate(() => !document.querySelector('#snd') && !document.querySelector('#xp-snd'));
   check('no sound controls (v1.0.0 has no sound)', !info.includes('音声') && noSoundUi, info);
   const vcodec = (info.match(/1コマずつ（(\S+) \/ MP4）/) || [])[1];
@@ -834,6 +842,7 @@ async function sheet(page, file, rows) {
   for (let i = 0; i < x.length; i++) wav.writeInt16LE(Math.round(Math.max(-1, Math.min(1, x[i] * 0.8)) * 32767), 44 + i * 2);
 
   const { page, errors } = await openPage({ width: 1280, height: 800 });
+  check('song: BETA badge on the song field', await page.evaluate(() => document.querySelector('#song-field > label .beta').textContent === 'BETA'));
   check('song: panel hidden before choosing', await page.evaluate(() => document.querySelector('#song-panel').hidden && document.querySelector('#song-clear').hidden));
   await page.setInputFiles('#song-file', { name: 'test-beat.wav', mimeType: 'audio/wav', buffer: wav });
   await page.waitForFunction(() => window.__hg.song.cur, null, { timeout: 60000 });
@@ -975,6 +984,84 @@ async function sheet(page, file, rows) {
     check('song sync: pausing the film pauses the song', await page.evaluate(() => window.__hg.musicTime(window.__hg.state.film.music) === null));
   } else {
     console.log('(song sync playback skipped: audio playback unavailable in this browser)');
+  }
+  // 書き出し用の切り出し: 曲の offset から映像の尺だけ。頭は立ち上げ、最後はフェード、足りなければ無音、2ch
+  const cut = await page.evaluate(async () => {
+    const { cutSong } = await import('./src/music.js');
+    const sr = 1000, a = new Float32Array(5000).fill(1);
+    const [l, r] = cutSong([a], sr, { offset: 1, duration: 6, fadeFrom: 3, fadeTo: 4 });
+    return { n: [l.length, r.length], start: [l[0], l[10]], before: l[2999], mid: l[3500], after: l[4001], tail: l[5999], same: l.every((v, i) => v === r[i]) };
+  });
+  check('song export: cutSong trims, ramps in, fades out, pads and makes stereo',
+    cut.n[0] === 6000 && cut.n[1] === 6000 && cut.start[0] === 0 && cut.start[1] === 1 && cut.before === 1 && Math.abs(cut.mid - 0.5) < 0.01 && cut.after === 0 && cut.tail === 0 && cut.same, JSON.stringify(cut));
+  // 書き出し: 曲が入る（AAC、なければ Opus）。画面に音声の方式と権利の注意書き
+  await page.click('#export');
+  await page.click('#xp-fps button[data-v="30"]');
+  await page.click('#xp-res button[data-v="720"]'); // 小さい解像度でも書き出せることをここで確かめる
+  await page.waitForFunction(() => !document.querySelector('#xp-info').textContent.includes('判定中'));
+  const xinfo = await page.textContent('#xp-info');
+  const acodec = (xinfo.match(/音声: (\S+)（/) || [])[1];
+  console.log(`song export: audio=${acodec}`);
+  check('song export: dialog shows the rights notice', xinfo.includes('曲の権利はご自身で確認'), xinfo);
+  if (acodec) {
+    check('song export: dialog shows the audio codec and song', xinfo.includes('test-beat.wav'), xinfo);
+    // AAC は OS のエンコーダーを使うので、Linux の Chrome（CI）では使えず Opus になる。どちらかで書き出せればよい
+    check('song export: audio is AAC or Opus', acodec === 'AAC' || acodec === 'Opus', `audio=${acodec}`);
+    await page.evaluate(() => { window.__hg.xp.limit = 2; });
+    const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 300000 }), page.click('#xp-start')]);
+    const file = join(outDir, 'export-song.mp4');
+    await dl.saveAs(file);
+    const bytes = readFileSync(file).toString('latin1');
+    check('song export: mp4 has an audio track', bytes.includes('soun') && (bytes.includes('mp4a') || bytes.includes('Opus')));
+    const dim = await page.evaluate(async () => {
+      const v = document.createElement('video');
+      v.muted = true;
+      v.src = URL.createObjectURL(window.__hg.state.lastExport.blob);
+      await new Promise((r, j) => { v.onloadedmetadata = r; v.onerror = () => j(new Error('video error')); });
+      return `${v.videoWidth}x${v.videoHeight}`;
+    });
+    check('song export: 720p export is 1280x720', dim === '1280x720', dim);
+    // 音声を読み戻して、長さと音が入っていることを確かめる（読めないブラウザでは省く）
+    const au = await page.evaluate(async () => {
+      try {
+        const buf = await window.__hg.state.lastExport.blob.arrayBuffer();
+        const ab = await new OfflineAudioContext(2, 1, 48000).decodeAudioData(buf);
+        const d = ab.getChannelData(0);
+        let s = 0;
+        for (let i = 0; i < d.length; i++) s += d[i] * d[i];
+        return { dur: ab.duration, rms: Math.sqrt(s / d.length) };
+      } catch (e) { return { error: String(e) }; }
+    });
+    if (au.error) console.log('(song export audio decode skipped: ' + au.error + ')');
+    else check('song export: audio is as long as the film and not silent', Math.abs(au.dur - 2) < 0.1 && au.rms > 0.01, JSON.stringify(au));
+    // 書き出し後の読み戻しの確認（音が入っていなければ画面で知らせる）が通っている
+    const ai = await page.evaluate(() => ({ info: window.__hg.state.lastExport.audioInfo, hidden: document.querySelector('#xp').hidden }));
+    check('song export: dialog closes and audio diagnostics are kept', ai.hidden && ai.info.chunks > 0 && ai.info.bytes > 0, JSON.stringify(ai));
+    // AAC の設定情報: 素の AudioSpecificConfig・ES_Descriptor（Apple のエンコーダーが返す形）・esds の箱ごと、から中身を取り出す
+    const asc = await page.evaluate(async () => {
+      const { aacSpecificConfig } = await import('./src/export.js');
+      const es = [0x03, 0x19, 0, 0, 0, 0x04, 0x11, 0x40, 0x15, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x05, 0x02, 0x11, 0x90, 0x06, 0x01, 0x02];
+      // iPhone 17 Pro の Safari が実際に返した形（先頭 24 バイトは実物どおり）
+      const esLong = [0x03, 0x80, 0x80, 0x80, 0x22, 0, 0, 0, 0x04, 0x80, 0x80, 0x80, 0x14, 0x40, 0x14, 0, 0x18, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x05, 0x80, 0x80, 0x80, 0x02, 0x11, 0x90, 0x06, 0x80, 0x80, 0x80, 0x01, 0x02];
+      const f = (x) => { const r = aacSpecificConfig(x && new Uint8Array(x)); return r ? [...r] : null; };
+      return [f([0x11, 0x90]), f(es), f(esLong), f([0, 0, 0, 39, 0x65, 0x73, 0x64, 0x73, 0, 0, 0, 0, ...es]), f([0x03, 0x01]), f(null), f(new Array(30).fill(0x11))];
+    });
+    check('song export: AAC config taken out of ES descriptors', JSON.stringify(asc) === JSON.stringify([[17, 144], [17, 144], [17, 144], [17, 144], null, null, null]), JSON.stringify(asc));
+    // AAC を ADTS の見出し付きで出すエンコーダー向け: 見出しを取り除く（見出しがなければそのまま）
+    const adts = await page.evaluate(async () => {
+      const { stripAdts } = await import('./src/export.js');
+      const mk = (bytes) => new EncodedAudioChunk({ type: 'key', timestamp: 0, data: new Uint8Array(bytes) });
+      const read = (c) => { const d = new Uint8Array(c.byteLength); c.copyTo(d); return [...d]; };
+      return {
+        noCrc: read(stripAdts(mk([0xff, 0xf1, 0x4c, 0x80, 0x01, 0x7f, 0xfc, 1, 2, 3]))),
+        crc: read(stripAdts(mk([0xff, 0xf0, 0x4c, 0x80, 0x01, 0x7f, 0xfc, 9, 9, 1, 2]))),
+        raw: read(stripAdts(mk([0x21, 0x10, 5, 6, 7, 8, 9, 10]))),
+      };
+    });
+    check('song export: strips ADTS headers from AAC frames', JSON.stringify(adts) === JSON.stringify({ noCrc: [1, 2, 3], crc: [1, 2], raw: [0x21, 0x10, 5, 6, 7, 8, 9, 10] }), JSON.stringify(adts));
+  } else {
+    check('song export: dialog says the song is not included', xinfo.includes('曲は入りません'), xinfo);
+    await page.click('#xp-close');
   }
   await page.click('#back');
   await page.waitForTimeout(300);

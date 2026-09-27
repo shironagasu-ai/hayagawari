@@ -325,3 +325,28 @@ export function applyTaps(g, taps) {
   if (g) bar = mod(Math.round((g.first + g.bar * g.beat - first) / beat), 4);
   return { bpm: 60 / beat, beat, first, bar };
 }
+
+/**
+ * 書き出し用に曲を映像の尺に切り出す（映像の t 秒 = 曲の offset + t 秒）。
+ * 最後は fadeFrom〜fadeTo（映像の時刻）で音を消し、頭はプツッと鳴らないよう 5ms で立ち上げる。
+ * 曲が映像より短ければ残りは無音。モノラルは 2ch に広げ、3ch 以上は先頭の 2ch を使う
+ * @param {Float32Array[]} chans 曲の波形（チャンネルごと）
+ * @param {number} sr サンプリング周波数
+ * @param {{ offset: number, duration: number, fadeFrom: number, fadeTo: number }} o
+ * @returns {Float32Array[]} 2ch・長さ round(duration * sr)
+ */
+export function cutSong(chans, sr, { offset, duration, fadeFrom, fadeTo }) {
+  const n = Math.max(1, Math.round(duration * sr));
+  const o = Math.round(offset * sr);
+  const ramp = Math.round(0.005 * sr);
+  const f0 = fadeFrom * sr, f1 = fadeTo * sr;
+  const src = [chans[0], chans[Math.min(1, chans.length - 1)]];
+  return src.map((c) => {
+    const out = new Float32Array(n);
+    const m = Math.max(0, Math.min(n, c.length - o));
+    out.set(c.subarray(o, o + m));
+    for (let i = 0; i < Math.min(ramp, m); i++) out[i] *= i / ramp;
+    for (let i = Math.max(0, Math.floor(f0)); i < m; i++) out[i] *= i >= f1 ? 0 : Math.min(1, (f1 - i) / (f1 - f0));
+    return out;
+  });
+}
