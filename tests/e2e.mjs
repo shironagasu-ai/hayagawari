@@ -257,25 +257,47 @@ async function sheet(page, file, rows) {
   });
   check('no auto subtitle when blank', autoSub.length === 0, autoSub.join(','));
 
-  // 自動選択に戻したとき、シードで全パターンが出うる
-  const seen = await page.evaluate(() => {
-    window.__hg.setOpt('opener', 'auto'); window.__hg.setOpt('closer', 'auto'); window.__hg.setOpt('variant', null);
-    const o = new Set(), c = new Set(), v = new Set(), tr = new Set();
+  // おまかせの抽選で全パターンが実際に出る: スタイル・オープニング・エンディング・見せ方・切り替え・背景の飾り・配色。
+  // 重みが付いていても、抽選の決まり（見せ方と合わない飾りを避ける・直前と同じを避ける・最後の切り替えにグリッチを使わない など）で
+  // 実際には出ないことがありうるので、重みの表ではなく映像を組み立てて数える（描画はしないので速い。シードは固定で結果はぶれない）
+  const seen = await page.evaluate(async () => {
+    const h = window.__hg, { catalogKeys, AVOID_DECOR } = h.fx;
+    h.setOpt('opener', 'auto'); h.setOpt('closer', 'auto'); h.setOpt('variant', null);
+    const cats = ['style', 'opener', 'closer', 'variant', 'transition', 'decor', 'palette'];
+    const count = Object.fromEntries(cats.map((c) => [c, {}]));
+    const add = (c, k) => { count[c][k] = (count[c][k] || 0) + 1; };
     const clash = [];
-    // 候補が増えても取りこぼさないよう多めに（16 種を 200 回なら、1 種でも出ない確率は 1e-4 程度）
+    // 候補が増えても取りこぼさないよう多めに（エンディング 15 種で、いちばん出にくいものが 200 本中 5 回ほど）
     for (let i = 0; i < 200; i++) {
-      window.__hg.setSeed('S' + i); window.__hg.setOpt('style', 'auto'); window.__hg.build();
-      const f = window.__hg.state.film;
-      o.add(f.opener); c.add(f.closer);
-      f.summary.forEach((s) => { if (s.variant) v.add(s.variant); if (s.out) tr.add(s.out); });
-      // 合わない組み合わせ（見せ方 × 背景の飾り）が出ていないか
-      f.summary.forEach((s) => { if (s.kind === 'work') for (const d of s.decor) if ((window.__hg.fx.AVOID_DECOR[s.variant] || []).includes(d)) clash.push(`${s.variant}+${d}`); });
+      h.setSeed('S' + i); h.setOpt('style', 'auto'); h.build();
+      const f = h.state.film;
+      add('style', f.theme); add('opener', f.opener); add('closer', f.closer);
+      for (const s of f.summary) {
+        if (s.kind === 'work') {
+          add('variant', s.variant);
+          for (const d of s.decor) add('decor', d);
+          if (s.palette) add('palette', s.palette);
+          // 合わない組み合わせ（見せ方 × 背景の飾り）が出ていないか
+          for (const d of s.decor) if ((AVOID_DECOR[s.variant] || []).includes(d)) clash.push(`${s.variant}+${d}`);
+        }
+        // エンディングの後（ループの頭）は常にカットなので数えない
+        if (s.kind !== 'closer' && s.out) add('transition', s.out);
+      }
     }
-    return { o: o.size, c: c.size, v: v.size, tr: [...tr].sort().join(','), clash };
+    // スタイルの「ミックス」は自分で選んだときだけ（おまかせの抽選には入らない）
+    const { STYLE_KEYS } = await import('/src/director.js');
+    const all = { style: STYLE_KEYS() };
+    for (const c of cats.slice(1)) all[c] = catalogKeys(c);
+    const missing = [], rarest = {};
+    for (const c of cats) {
+      for (const k of all[c]) if (!count[c][k]) missing.push(`${c}:${k}`);
+      rarest[c] = all[c].map((k) => `${k}=${count[c][k] || 0}`).sort((x, y) => +x.split('=')[1] - +y.split('=')[1]).slice(0, 2).join(' ');
+      rarest[c] += ` (${Object.keys(count[c]).length}/${all[c].length})`;
+    }
+    return { missing, rarest, clash };
   });
-  console.log('auto coverage:', JSON.stringify(seen));
-  check('auto picks all openers/closers', seen.o === opKeys.length && seen.c === clKeys.length, `${seen.o}/${seen.c}`);
-  check('auto uses new transitions', seen.tr.includes('spin') && seen.tr.includes('door'));
+  console.log('auto coverage (200 films, rarest first):', JSON.stringify(seen.rarest));
+  check('auto picks every style / opener / closer / variant / transition / decor / palette', seen.missing.length === 0, seen.missing.join(', '));
   check('no clashing variant + decor pairs', seen.clash.length === 0, seen.clash.slice(0, 5).join(', '));
 
   // 注目点エディタ: 開く → ドラッグ移動 → 追加 → 1番にする → 削除 → 自動に戻す
