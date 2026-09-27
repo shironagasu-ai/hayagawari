@@ -762,6 +762,91 @@ async function sheet(page, file, rows) {
   await page.waitForFunction(() => window.__hg.song.cur, null, { timeout: 30000 });
   const restored = await page.evaluate(() => ({ grid: JSON.stringify(window.__hg.song.cur.grid), name: window.__hg.song.cur.name, source: window.__hg.song.cur.source, size: window.__hg.song.cur.blob.size }));
   check('song: restored after reload', restored.grid === saved && restored.name === 'test-beat.wav' && restored.source === 'manual' && restored.size === wav.length, JSON.stringify(restored));
+  // 映像を曲に合わせる: テンポは曲の BPM（倍・半分）、作品の切り替えとエンディングは曲の小節の頭、最後に音を消す
+  await page.click('#song-reset');
+  await page.evaluate(() => window.__hg.loadSamples());
+  await page.waitForFunction(() => window.__hg.state.works.length === 6, null, { timeout: 30000 });
+  const synced = await page.evaluate(() => {
+    const h = window.__hg;
+    h.setSeed('SONG-SYNC');
+    const f = h.build();
+    const g = h.song.cur.grid;
+    const bar = g.beat * 4, d0 = g.first + g.bar * g.beat;
+    const offBar = (x) => { const d = (((x - d0) % bar) + bar * 1.5) % bar - bar / 2; return Math.abs(d); };
+    return {
+      bpm: f.bpm, songBpm: g.bpm, music: f.music, duration: f.duration,
+      starts: f.segments.slice(1).map((s) => offBar(f.music.offset + s.start)),
+      opener: f.segments[0].dur, bar, summary: f.summary.map((s) => [s.kind, s.variant, s.theme, s.out]),
+      hint: document.querySelector('#go-hint').textContent,
+    };
+  });
+  const ratio = synced.bpm / synced.songBpm;
+  check('song sync: film tempo follows the song (or its double/half)', [0.5, 1, 2].some((m) => Math.abs(ratio - m) < 1e-9), `${synced.bpm} / ${synced.songBpm}`);
+  check('song sync: works and ending start on the song\'s downbeats (±1 frame)', synced.starts.every((d) => d < 1 / 60), JSON.stringify(synced.starts.map((d) => +d.toFixed(4))));
+  check('song sync: song starts within the first bar before the opening ends', synced.music.offset >= 0 && synced.music.offset < synced.bar, JSON.stringify(synced.music));
+  check('song sync: fades out over the last 2 beats', Math.abs(synced.music.fadeTo - synced.duration) < 1e-9 && Math.abs(synced.duration - synced.music.fadeFrom - 2 * 60 / synced.bpm) < 1e-9);
+  const est = +(synced.hint.match(/約 (\d+) 秒/) || [])[1];
+  check('song sync: length hint follows the song', Math.abs(est - synced.duration) <= synced.duration * 0.15, `${synced.hint} / ${synced.duration.toFixed(1)}`);
+  // 曲が映像より短ければ、作品の拍数を減らして収める（24 秒の曲に 3 作品・ゆったり）
+  const fitted = await page.evaluate(() => {
+    const h = window.__hg, s = h.song.cur;
+    const all = h.state.works.slice();
+    h.setAdvOpen(true);
+    h.setOpt('pace', 'relaxed');
+    h.state.works.splice(3);
+    const f = h.build();
+    const res = { end: f.music.offset + f.duration, song: s.duration, workBeats: Math.round(f.segments[1].dur / f.beat) };
+    // 同じ設定で、曲が十分に長かったときの拍数
+    const dur = s.duration;
+    s.duration = 1e4;
+    res.fullBeats = Math.round(h.build().segments[1].dur / f.beat);
+    s.duration = dur;
+    h.state.works.splice(0, h.state.works.length, ...all);
+    h.setOpt('pace', 'normal');
+    h.setAdvOpen(false);
+    return res;
+  });
+  check('song sync: shortens each work to fit a short song', fitted.end <= fitted.song + 1e-6 && fitted.workBeats < fitted.fullBeats && fitted.workBeats % 4 === 0, JSON.stringify(fitted));
+  // 曲の有無で抽選の結果（見せ方・スタイル・切り替え）は変わらない。曲がなければ今までどおりの整数の BPM・音なし
+  const plain = await page.evaluate(() => {
+    const h = window.__hg;
+    const s = h.song.cur;
+    h.song.cur = null;
+    h.setSeed('SONG-SYNC');
+    const f = h.build();
+    h.song.cur = s;
+    return { bpm: f.bpm, music: f.music, summary: f.summary.map((x) => [x.kind, x.variant, x.theme, x.out]) };
+  });
+  check('song sync: same picks with or without a song', JSON.stringify(plain.summary) === JSON.stringify(synced.summary), JSON.stringify(plain.summary));
+  check('song sync: without a song the film is silent with a whole BPM', plain.music === null && Number.isInteger(plain.bpm));
+  // 同期再生: 映像の時刻が曲の再生位置に従う。一時停止・次の作品へ移動で曲も合わせる
+  await page.evaluate(() => { window.__hg.setSeed('SONG-SYNC'); window.__hg.build(); });
+  await page.click('#go');
+  const audible = await page.waitForFunction(() => window.__hg.musicTime(window.__hg.state.film.music) !== null, null, { timeout: 10000 }).then(() => true, () => false);
+  if (audible) {
+    // 描いた瞬間の映像の時刻と曲の位置を記録する（ソフトウェア描画は 1 コマが遅いので、コマの合間に読むと比べられない）
+    await page.evaluate(() => {
+      const h = window.__hg, f = h.state.film, render = f.render;
+      window.__drawn = [];
+      f.render = (r, t) => { window.__drawn.push({ t, mt: h.musicTime(f.music) }); return render(r, t); };
+    });
+    const lastDrawn = () => page.evaluate(() => window.__drawn.filter((d) => d.mt !== null).slice(-3));
+    await page.waitForTimeout(1500);
+    const a = await lastDrawn();
+    check('song sync: video clock follows the song while playing', a.length >= 2 && a[a.length - 1].t > 1 && a.every((d) => Math.abs(d.mt - d.t) < 0.05), JSON.stringify(a));
+    await page.keyboard.press('ArrowRight');
+    await page.keyboard.press('ArrowRight');
+    await page.waitForTimeout(800);
+    const start = await page.evaluate(() => window.__hg.state.film.segments[2].start);
+    const b = await lastDrawn();
+    check('song sync: jumping to the next work moves the song too', b.length >= 2 && b[0].t >= start && b.every((d) => Math.abs(d.mt - d.t) < 0.05), JSON.stringify({ start, b }));
+    await page.evaluate(() => window.__hg.pause());
+    check('song sync: pausing the film pauses the song', await page.evaluate(() => window.__hg.musicTime(window.__hg.state.film.music) === null));
+  } else {
+    console.log('(song sync playback skipped: audio playback unavailable in this browser)');
+  }
+  await page.click('#back');
+  await page.waitForTimeout(300);
   await page.evaluate(() => { document.querySelector('#song-field').scrollIntoView(); });
   await page.screenshot({ path: join(outDir, 'song-field.png') });
   // 外す: 保存からも消える
