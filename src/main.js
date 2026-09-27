@@ -688,7 +688,7 @@ async function refreshExportInfo() {
   if (xp.aenc) msg += `<br>音声: <b>${xp.aenc.label}</b>（${escapeHtml(song.cur.name)}）`;
   if (xp.enc.muxCodec !== 'avc') msg += `<br><span class="warn">このブラウザでは H.264 が使えないため ${xp.enc.label} になります。iPhone の写真アプリや一部の SNS では再生・投稿できないことがあります（Chrome / Edge / Safari なら H.264 で書き出せます）。</span>`;
   if (music && !xp.aenc) msg += '<br><span class="warn">このブラウザは音声の書き出しに対応していないため、曲は入りません（映像だけになります）。</span>';
-  else if (xp.aenc && xp.aenc.muxCodec !== 'aac') msg += `<br><span class="warn">このブラウザでは AAC が使えないため、音声は ${xp.aenc.label} になります。iPhone や一部の SNS では音が出ないことがあります（Chrome / Edge / Safari なら AAC で書き出せます）。</span>`;
+  else if (xp.aenc && xp.aenc.muxCodec !== 'aac') msg += `<br><span class="warn">このブラウザでは AAC が使えないため、音声は ${xp.aenc.label} になります。iPhone や一部の SNS では音が出ないことがあります（Mac や Windows の Chrome / Edge などでは AAC で書き出せます）。</span>`;
   info.innerHTML = msg + rights;
 }
 

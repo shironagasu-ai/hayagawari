@@ -105,6 +105,7 @@ v1.0.0 のように複数の PR にまたがる版は、途中の状態を本番
   - 作例動画の作り直しに使う ffmpeg は `pip install imageio-ffmpeg` で入る静的ビルド（libx264 と libwebp_anim 入り）。`FFMPEG=$(python3 -c 'import imageio_ffmpeg;print(imageio_ffmpeg.get_ffmpeg_exe())')`
   - 作業環境から `*.github.io`（本番・プレビュー）は開けない（プロキシで止まる）。公開の確認は Actions の結果とリリースで行う
   - 手元の Chromium は H.264 が使えないので、Chrome でだけ通る分岐（作例動画の再生・H.264 の書き出し）は CI の結果で確かめる
+  - AAC の書き出しは Linux の Chrome（CI）でも使えない（OS のエンコーダーを使うため）。CI では Opus になる。AAC は Mac・Windows の実機で確かめる
 
 ## コミットと PR
 

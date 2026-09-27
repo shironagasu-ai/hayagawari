@@ -94,7 +94,8 @@ v1.0.0 では合成の音をなくした。v1.1 で、ユーザーが持ち込�
 - コーデックは `pickAudioConfig`（AAC → Opus）。Opus のとき・音声を書き出せないときは書き出しの画面で知らせる
 - 実時間の録画（WebCodecs が使えないブラウザ）では曲を入れない（対象のブラウザが少ないため見送り。画面で知らせる）
 - 曲の欄に BETA の表示。曲の欄と書き出しの画面に権利の注意書き
-- 未確認のこと: 長い曲をスマホで書き出すときのメモリ（曲全体を 48kHz・float で読むので 4 分で約 90MB）。Safari の AudioEncoder（AAC）
+- AAC は OS のエンコーダーを使うので、Linux の Chrome（CI の Chrome も）では使えず Opus になる。AAC の経路は CI では通らない
+- 未確認のこと: 長い曲をスマホで書き出すときのメモリ（曲全体を 48kHz・float で読むので 4 分で約 90MB）。Mac・Windows の Chrome / Edge と Safari で AAC になるか（実機で確かめる）
 
 当初の計画:
 
