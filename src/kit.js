@@ -15,52 +15,6 @@ export function fitIn(aspect, bw, bh) {
   return aspect > bw / bh ? { w: bw, h: bw / aspect } : { w: bh * aspect, h: bh };
 }
 
-// 作品ごとの配色（テーマの背景モードとパレットから）
-export function colorsFor(work, theme) {
-  const R = work.roles;
-  const [dh, ds] = rgbToHsl(R.dominant.map((v) => v * 255));
-  const [ah] = rgbToHsl(R.accent.map((v) => v * 255));
-  let bg, ink, accent = R.accent.slice();
-  if (theme.bg === 'dark') {
-    bg = hsl(dh, Math.min(ds, 0.35), 0.075);
-    ink = [0.95, 0.95, 0.94];
-  } else if (theme.bg === 'light') {
-    bg = hsl(dh, Math.min(ds, 0.3) * 0.5, 0.925);
-    ink = hsl(ah, 0.25, 0.09);
-  } else if (theme.bg === 'mono') {
-    // MONO: 無彩色の背景と文字。アクセントだけ固定の赤
-    bg = [0.055, 0.055, 0.06];
-    ink = [0.96, 0.96, 0.96];
-    accent = [0.94, 0.2, 0.18];
-  } else if (theme.bg === 'neon') {
-    // NEON: ほぼ黒の背景に、作品の色相を最大彩度で光らせる
-    bg = hsl(ah, 0.5, 0.035);
-    ink = hsl(ah, 0.35, 0.95);
-    accent = hsl(ah, 1, 0.6);
-  } else if (theme.bg === 'pastel') {
-    // PASTEL: 作品の色相を淡くした背景、アクセントは同系色の中明度
-    bg = hsl(ah, 0.55, 0.89);
-    ink = hsl(ah, 0.3, 0.18);
-    accent = hsl(ah, 0.6, 0.62);
-  } else if (theme.bg === 'paper') {
-    // RETRO: 生成り紙の背景、墨色の文字、くすんだアクセント
-    bg = [0.93, 0.9, 0.82];
-    ink = [0.16, 0.13, 0.11];
-    accent = hsl(ah, 0.45, 0.42);
-  } else {
-    bg = hsl(ah, 0.72, 0.52);
-    ink = lum(bg) > 0.5 ? hsl(ah, 0.4, 0.08) : [0.98, 0.97, 0.95];
-    // POP: アクセントは補色寄り
-    accent = hsl((ah + 0.5) % 1, 0.8, lum(bg) > 0.5 ? 0.35 : 0.6);
-  }
-  // アクセントが背景に沈む場合は明度をずらす（MONO は固定色なので対象外）
-  if (theme.bg !== 'mono' && Math.abs(lum(accent) - lum(bg)) < 0.22) {
-    const [h, s, l] = rgbToHsl(accent.map((v) => v * 255));
-    accent = hsl(h, s, lum(bg) > 0.5 ? Math.max(0.2, l - 0.3) : Math.min(0.8, l + 0.3));
-  }
-  return { bg, ink, accent, deco: theme.bg === 'accent' ? mix(bg, ink, 0.22) : accent };
-}
-
 // 注目点を n 個そろえる（足りなければ近傍にずらした点を足す）
 export function pointsFor(work, n, rng) {
   const src = work.focal.length ? work.focal : [{ x: 0.5, y: 0.42, size: 0.35, strength: 1 }];
@@ -197,17 +151,16 @@ export function layoutFor(work, W, H, side) {
 
 // タイトル・番号・メタ情報のブロック
 export function makeTextBlock(S) {
-  const { tf, theme, work, idx, total, artist, minDim, layout, year } = S;
-  const up = (s) => (theme.upper ? s.toUpperCase() : s);
+  const { tf, theme, work, idx, artist, minDim, layout } = S;
   const side = layout.text.stack === 'side';
   const titleSize = Math.round(minDim * (side ? 0.08 : 0.066));
-  const T = tf.get(up(work.title), { family: theme.font, size: titleSize, weight: theme.weight, tracking: theme.tracking });
+  const T = tf.get(work.title, { family: theme.font, size: titleSize, weight: theme.weight, tracking: theme.tracking });
   const I = tf.get(`No.${pad2(idx + 1)}`, { family: 'mono', size: Math.round(minDim * 0.022), weight: 700, tracking: 0.18 });
-  const meta = [artist ? up(artist) : null, String(year)].filter(Boolean).join('  /  ');
-  const M = tf.get(meta, { family: 'mono', size: Math.round(minDim * 0.017), weight: 500, tracking: 0.14 });
+  // 作家名（未入力なら出さない）
+  const M = artist ? tf.get(artist, { family: 'mono', size: Math.round(minDim * 0.017), weight: 500, tracking: 0.14 }) : null;
   const scale = Math.min(1, layout.text.maxW / Math.max(1, textW(T)));
   const gap = minDim * 0.018;
-  const total_h = textH(I) + gap + textH(T, scale) + gap * 1.3 + textH(M);
+  const total_h = textH(I) + gap + textH(T, scale) + (M ? gap * 1.3 + textH(M) : 0);
   const y0 = side ? layout.text.y - total_h : layout.text.y;
   const barW = minDim * 0.05;
   return (r, t, t0, col) => {

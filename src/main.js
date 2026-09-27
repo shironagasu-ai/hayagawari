@@ -3,19 +3,21 @@ import { Renderer } from './gl.js';
 import { TextFactory } from './text.js';
 import { analyzeImage } from './analyze.js';
 import { buildFilm } from './director.js';
-import { makeSamples } from './samples.js';
+import { SAMPLES, pickSamples, samplesByFile, fetchSamples } from './samples.js';
 import { randomSeed, createRng } from './rng.js';
 import { initFocalEditor, openFocalEditor } from './focal-editor.js';
-import { pickEncoderConfig, pickAudioConfig, exportFrames } from './export.js';
-import { AudioEngine, buildScore, renderScoreOffline, SOUND_MODES, SOUND_LABELS } from './audio.js';
+import { pickEncoderConfig, exportFrames } from './export.js';
 import { newKey, putImage, saveSession, loadSession, requestPersist } from './store.js';
 import { VERSION, BUILD, PREVIEW, storageKey } from './version.js';
+import { initCatalog, catalogFilm, catalogKeys } from './catalog.js';
+import { CATEGORIES, labelOf } from './fx/labels.js';
+import { AVOID_DECOR } from './fx/rules.js';
 
 const $ = (s) => document.querySelector(s);
 const canvas = $('#gl');
 const body = document.body;
 
-const ASPECTS = { '16:9': [1920, 1080], '9:16': [1080, 1920], '1:1': [1080, 1080] };
+const ASPECTS = { '16:9': [1920, 1080], '4:3': [1440, 1080], '1:1': [1080, 1080], '3:4': [1080, 1440], '9:16': [1080, 1920] };
 
 let renderer;
 try {
@@ -25,7 +27,6 @@ try {
   throw e;
 }
 const tf = new TextFactory(renderer);
-const audio = new AudioEngine();
 
 const state = {
   works: [], // analyzeImage の結果 + id
@@ -36,7 +37,6 @@ const state = {
   order: 'keep',
   opener: 'auto',
   closer: 'auto',
-  sound: 'full', // 'full' ビート＋効果音 / 'sfx' 効果音のみ / 'off'
   advOpen: false, // 詳細設定アコーディオンの開閉（映像全体の設定だけ。作品ごとのタイトル・注目点は開閉に関係なく常に反映）
   film: null,
   t: 0,
@@ -136,7 +136,6 @@ function renderWorks() {
   state.works.forEach((w, i) => {
     const el = document.createElement('div');
     el.className = 'work';
-    el.draggable = true;
     el.dataset.id = w.id;
     const pts = w.focal.map((f, k) => `<span class="pt ${k === 0 ? 'p0' : ''} ${f.manual ? 'manual' : ''}" style="left:${f.x * 100}%;top:${f.y * 100}%">${k + 1}</span>`).join('');
     el.innerHTML = `
@@ -152,25 +151,10 @@ function renderWorks() {
     if (a >= 1) { ptbox.style.top = `${(1 - 1 / a) * 50}%`; ptbox.style.bottom = `${(1 - 1 / a) * 50}%`; }
     else { ptbox.style.left = `${(1 - a) * 50}%`; ptbox.style.right = `${(1 - a) * 50}%`; }
     ptbox.innerHTML = pts;
-    thumb.addEventListener('click', () => openFocalEditor(w, () => { state.film = null; renderWorks(); }));
+    thumb.addEventListener('click', () => { if (!sorter.justDropped) openFocalEditor(w, () => { state.film = null; renderWorks(); }); });
     el.querySelector('.x').addEventListener('click', () => removeWork(w.id));
     el.querySelector('input.title').addEventListener('input', (e) => { w.title = e.target.value || 'UNTITLED'; state.film = null; });
-    el.addEventListener('dragstart', (e) => { el.classList.add('dragging'); e.dataTransfer.setData('text/x-work', String(w.id)); e.dataTransfer.effectAllowed = 'move'; });
-    el.addEventListener('dragend', () => el.classList.remove('dragging'));
-    el.addEventListener('dragover', (e) => { if (e.dataTransfer.types.includes('text/x-work')) { e.preventDefault(); el.classList.add('dropbefore'); } });
-    el.addEventListener('dragleave', () => el.classList.remove('dropbefore'));
-    el.addEventListener('drop', (e) => {
-      const id = Number(e.dataTransfer.getData('text/x-work'));
-      el.classList.remove('dropbefore');
-      if (!id) return;
-      e.preventDefault(); e.stopPropagation();
-      const from = state.works.findIndex((x) => x.id === id);
-      const [m] = state.works.splice(from, 1);
-      const to = state.works.findIndex((x) => x.id === w.id);
-      state.works.splice(to, 0, m);
-      state.film = null;
-      renderWorks();
-    });
+    el.addEventListener('pointerdown', (e) => sortDown(e, el));
     box.appendChild(el);
   });
   const n = state.works.length;
@@ -180,6 +164,137 @@ function renderWorks() {
   $('#works-bar').hidden = n === 0;
   scheduleSave();
 }
+
+// ---------------------------------------------------------------- 作品の並べ替え（マウス・タッチ共通）
+// マウス: カードのどこを掴んでも、少し動かすと並べ替えになる（動かさずに離せばクリック）。
+// タッチ: 左上の番号札はすぐ、カードのほかの場所は長押し（0.3 秒）で掴む。すぐ動かしたときはスクロール。
+// 掴んだカードは指について動き、ほかのカードはその場で詰めて動く。隙間や最後尾にも落とせる。
+const sorter = { el: null, ghost: null, pointerId: 0, x0: 0, y0: 0, dx: 0, dy: 0, x: 0, y: 0, timer: 0, armed: false, active: false, justDropped: false, raf: 0 };
+const SORT_MOVE = 6; // マウスでこれだけ動かしたら並べ替え開始（px）
+const SORT_HOLD = 300; // タッチの長押し（ms）
+
+function sortDown(e, el) {
+  if (sorter.el || (e.pointerType === 'mouse' && e.button !== 0)) return;
+  if (e.target.closest('input, button')) return;
+  Object.assign(sorter, { el, pointerId: e.pointerId, x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY, armed: false, active: false });
+  const fromGrip = !!e.target.closest('.grip');
+  if (e.pointerType === 'mouse' || fromGrip) sorter.armed = true; // 動かせばすぐ始まる
+  else sorter.timer = setTimeout(() => { sorter.armed = true; sortStart(); }, SORT_HOLD);
+  if (fromGrip) e.preventDefault();
+  window.addEventListener('pointermove', sortMove, { passive: false });
+  window.addEventListener('pointerup', sortUp);
+  window.addEventListener('pointercancel', sortCancel);
+}
+
+function sortMove(e) {
+  if (e.pointerId !== sorter.pointerId) return;
+  sorter.x = e.clientX; sorter.y = e.clientY;
+  const moved = Math.hypot(sorter.x - sorter.x0, sorter.y - sorter.y0);
+  if (!sorter.active) {
+    if (sorter.armed && moved > SORT_MOVE) sortStart();
+    else if (!sorter.armed && moved > 10) sortEnd(false); // 長押しの前に動いた＝スクロール
+    return;
+  }
+  e.preventDefault();
+  sortFollow();
+}
+
+function sortStart() {
+  const { el } = sorter;
+  if (!el || sorter.active) return;
+  clearTimeout(sorter.timer);
+  sorter.active = true;
+  const r = el.getBoundingClientRect();
+  sorter.dx = sorter.x0 - r.left; sorter.dy = sorter.y0 - r.top;
+  const g = el.cloneNode(true);
+  g.classList.add('sort-ghost');
+  g.querySelector('input.title').value = el.querySelector('input.title').value; // 入力欄の中身は複製されない
+  g.style.width = `${r.width}px`; g.style.height = `${r.height}px`;
+  document.body.appendChild(g);
+  sorter.ghost = g;
+  el.classList.add('sort-hole');
+  body.classList.add('sorting');
+  if (navigator.vibrate) navigator.vibrate(10);
+  sortFollow();
+  const scroll = () => { // 画面の上下の端に近づいたら編集画面をスクロール
+    const ed = $('#editor'), edge = 70, h = window.innerHeight;
+    const v = sorter.y < edge ? -(edge - sorter.y) : sorter.y > h - edge ? sorter.y - (h - edge) : 0;
+    if (v) { ed.scrollTop += v * 0.25; sortPlace(); }
+    sorter.raf = requestAnimationFrame(scroll);
+  };
+  sorter.raf = requestAnimationFrame(scroll);
+}
+
+function sortFollow() {
+  sorter.ghost.style.transform = `translate(${sorter.x - sorter.dx}px, ${sorter.y - sorter.dy}px) rotate(-2deg) scale(1.04)`;
+  sortPlace();
+}
+
+// 詰めて動く途中（transform 中）でも、動き終わったあとの位置で判定する
+function layoutRect(c) {
+  const r = c.getBoundingClientRect();
+  const m = new DOMMatrixReadOnly(getComputedStyle(c).transform === 'none' ? undefined : getComputedStyle(c).transform);
+  return { left: r.left - m.e, top: r.top - m.f, width: r.width, height: r.height };
+}
+
+// 指の位置にいちばん近いカードの前か後ろへ、掴んだカードの場所（穴）を動かす
+function sortPlace() {
+  const box = $('#works'), hole = sorter.el;
+  const cards = [...box.children].filter((c) => c !== hole);
+  if (!cards.length) return;
+  let best = null, bd = Infinity;
+  for (const c of cards) {
+    const r = layoutRect(c);
+    const d = Math.hypot(sorter.x - (r.left + r.width / 2), sorter.y - (r.top + r.height / 2));
+    if (d < bd) { bd = d; best = c; }
+  }
+  const r = layoutRect(best);
+  const after = sorter.x > r.left + r.width / 2;
+  const ref = after ? best.nextSibling : best;
+  if (ref === hole || (after ? best.nextSibling === hole : best.previousSibling === hole)) return;
+  // 動く前の位置を覚えておき、詰めて動く様子をなめらかに見せる
+  const before = new Map([...box.children].map((c) => [c, c.getBoundingClientRect()]));
+  box.insertBefore(hole, ref);
+  for (const c of box.children) {
+    const a = before.get(c), b = layoutRect(c);
+    if (!a || (a.left === b.left && a.top === b.top)) continue;
+    c.style.transition = 'none';
+    c.style.transform = `translate(${a.left - b.left}px, ${a.top - b.top}px)`;
+    requestAnimationFrame(() => { c.style.transition = 'transform 0.18s ease-out'; c.style.transform = ''; });
+  }
+}
+
+function sortUp(e) { if (e.pointerId === sorter.pointerId) sortEnd(true); }
+function sortCancel(e) { if (e.pointerId === sorter.pointerId) sortEnd(true); }
+
+function sortEnd(commit) {
+  clearTimeout(sorter.timer);
+  cancelAnimationFrame(sorter.raf);
+  window.removeEventListener('pointermove', sortMove);
+  window.removeEventListener('pointerup', sortUp);
+  window.removeEventListener('pointercancel', sortCancel);
+  const wasActive = sorter.active;
+  if (sorter.ghost) sorter.ghost.remove();
+  if (sorter.el) sorter.el.classList.remove('sort-hole');
+  body.classList.remove('sorting');
+  Object.assign(sorter, { el: null, ghost: null, active: false, armed: false });
+  if (!wasActive) return;
+  // 並べ替えた直後のクリックで注目点エディタが開かないように
+  sorter.justDropped = true;
+  setTimeout(() => { sorter.justDropped = false; }, 0);
+  if (!commit) return;
+  const order = [...$('#works').children].map((c) => Number(c.dataset.id));
+  const same = order.every((id, i) => state.works[i] && state.works[i].id === id);
+  if (!same) {
+    const byId = new Map(state.works.map((w) => [w.id, w]));
+    state.works = order.map((id) => byId.get(id)).filter(Boolean);
+    state.film = null;
+  }
+  renderWorks();
+}
+// 掴んでいる間はタッチでページがスクロールしないように（iOS は touchmove を止める必要がある）
+document.addEventListener('touchmove', (e) => { if (sorter.active && e.cancelable) e.preventDefault(); }, { passive: false });
+document.addEventListener('contextmenu', (e) => { if (sorter.el && sorter.armed) e.preventDefault(); }); // 長押しのメニューを出さない
 
 function estimateDuration() {
   const beats = { tight: 6, normal: 8, relaxed: 10 }[effectiveSettings().pace];
@@ -325,7 +440,6 @@ function build() {
     artist: $('#artist').value.trim(), subline: $('#subline').value.trim(), handle: $('#handle').value.trim(),
   });
   state.buildMs = performance.now() - t0;
-  refreshScore();
   resize();
   renderMarks();
   $('#i-style').textContent = state.film.theme;
@@ -337,36 +451,10 @@ function build() {
   return state.film;
 }
 
-// ---------------------------------------------------------------- 音
-
-function refreshScore() {
-  if (!state.film) return;
-  state.score = buildScore(state.film, state.seed, state.sound);
-  audio.setScore(state.score, state.seed);
-}
-
-// 再生位置が飛んだとき（再生開始・シーク・ループ）に音を合わせ直す
-function syncAudio() {
-  if (state.playing && state.sound !== 'off') audio.start(state.t);
-  else audio.stop();
-}
-
-const SOUND_ICON = { full: '🔊', sfx: '🔉', off: '🔇' };
-function setSound(mode) {
-  state.sound = SOUND_MODES.includes(mode) ? mode : 'full';
-  try { localStorage.setItem(storageKey('hg-sound'), state.sound); } catch { /* 保存できなくても動作に影響なし */ }
-  const b = $('#snd');
-  b.textContent = `${SOUND_ICON[state.sound]} ${SOUND_LABELS[state.sound]}`;
-  b.classList.toggle('muted', state.sound === 'off');
-  refreshScore();
-  syncAudio();
-}
-
 function play(fromStart = true) {
   if (!state.film) build();
   if (!state.film) return;
   if (fromStart) state.t = 0;
-  audio.unlock(); // ユーザー操作の中で音を許可
   state.playing = true;
   if (!body.classList.contains('playing')) {
     body.classList.add('playing');
@@ -376,23 +464,26 @@ function play(fromStart = true) {
   }
   $('#play').textContent = '❚❚';
   heroSync();
-  syncAudio();
   poke();
 }
 
 function pause() {
   state.playing = false;
-  audio.stop();
   $('#play').textContent = '▶';
   state.dirty = true;
 }
 
 // fromHistory: ブラウザの「戻る」で閉じたとき（履歴はもう戻っている）
+const fullscreenEl = () => document.fullscreenElement || document.webkitFullscreenElement;
+const exitFullscreen = () => (document.exitFullscreen || document.webkitExitFullscreen)?.call(document);
+
 function toEditor({ fromHistory = false } = {}) {
   pause();
+  // カタログの見本を流していたら、本編の映像は作り直す
+  if (state.catalogFilm) { state.film = null; state.catalogFilm = false; }
   body.classList.remove('playing');
   heroSync();
-  if (document.fullscreenElement) document.exitFullscreen();
+  if (fullscreenEl()) exitFullscreen();
   if (player.entry) {
     player.entry = false;
     if (!fromHistory) { player.pendingBack = true; history.back(); } // ボタンで閉じたときは、積んだ履歴を取り除く
@@ -441,7 +532,6 @@ function renderMarks() {
 const perf = { frames: 0, acc: 0, fps: 0, jsMs: 0, worst: 0, lastReport: 0 };
 let last = performance.now();
 let rafId = 0;
-const audioClock = { last: -1 }; // 音声の時計が止まっている環境（出力先なし等）を見分ける
 
 function fmt(s) {
   const m = Math.floor(s / 60);
@@ -456,19 +546,11 @@ function frame(now) {
   if (f) {
     if (state.playing) {
       state.t += dt;
-      // 音が鳴っているときは音の時計に合わせる（小さなズレはなめらかに、大きなズレは即座に）
-      const at = audio.filmTime();
-      if (Number.isFinite(at) && at >= 0 && at < f.duration && audio.ctx.currentTime !== audioClock.last) {
-        const diff = at - state.t;
-        state.t = Math.abs(diff) > 0.06 ? at : state.t + diff * 0.15;
-      }
-      if (audio.ctx) audioClock.last = audio.ctx.currentTime;
       if (state.t >= f.duration) {
         if (recorder) { finishRecording(); }
-        else if (state.loop) { state.t %= f.duration; syncAudio(); }
+        else if (state.loop) { state.t %= f.duration; }
         else { state.t = f.duration; pause(); }
       }
-      audio.pump();
     }
     if ((state.playing || state.dirty) && !state.exporting) {
       const t0 = performance.now();
@@ -507,26 +589,18 @@ let recorder = null;
 let recChunks = [];
 let recCancelled = false;
 
-function pickMime(withAudio) {
-  const cands = withAudio
-    ? ['video/mp4;codecs=avc1,mp4a.40.2', 'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm']
-    : ['video/mp4;codecs=avc1.640028', 'video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
+function pickMime() {
+  const cands = ['video/mp4;codecs=avc1.640028', 'video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
   return cands.find((m) => window.MediaRecorder && MediaRecorder.isTypeSupported(m));
 }
 
-function startRecording(sound = state.sound) {
+function startRecording() {
   if (!state.film || recorder) return;
-  const withAudio = sound !== 'off' && audio.unlock();
-  const mime = pickMime(withAudio);
+  const mime = pickMime();
   if (!mime || !canvas.captureStream) { toast('このブラウザは録画に対応していません'); return; }
   resize(1); // 仮想解像度そのままで録画
   state.film.render(renderer, 0);
   const stream = canvas.captureStream(60);
-  if (withAudio) {
-    if (sound !== state.sound) setSound(sound);
-    const as = audio.stream();
-    if (as) as.getAudioTracks().forEach((tr) => stream.addTrack(tr));
-  }
   recChunks = [];
   recCancelled = false;
   recorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 16_000_000 });
@@ -559,7 +633,7 @@ function download(blob, ext) {
 
 // ---------------------------------------------------------------- 書き出し（1コマずつ・WebCodecs）
 
-const xp = { res: 1, fps: 60, sound: 'full', enc: null, aenc: null, abort: null, running: false, limit: 0 }; // limit: テスト用に書き出す秒数を制限
+const xp = { res: 1, fps: 60, enc: null, abort: null, running: false, limit: 0 }; // limit: テスト用に書き出す秒数を制限（音声は入れない）
 
 function exportSize() {
   const [W, H] = ASPECTS[state.aspect];
@@ -571,7 +645,6 @@ async function refreshExportInfo() {
   const info = $('#xp-info');
   info.textContent = '判定中…';
   xp.enc = await pickEncoderConfig(w, h, xp.fps);
-  xp.aenc = xp.sound === 'off' ? null : await pickAudioConfig(48000, 2);
   const d = state.film.duration;
   const frames = Math.ceil(d * xp.fps);
   if (!xp.enc) {
@@ -580,9 +653,7 @@ async function refreshExportInfo() {
   }
   const mb = (xp.enc.config.bitrate * d) / 8 / 1e6;
   let msg = `方式: <b>1コマずつ（${xp.enc.label} / MP4）</b> ・ ${w}×${h} ・ ${xp.fps}fps ・ ${fmt(d)}（${frames} コマ）・ 約 ${mb.toFixed(0)} MB`;
-  msg += `<br>音声: ${xp.sound === 'off' ? 'なし' : xp.aenc ? `<b>${SOUND_LABELS[xp.sound]}（${xp.aenc.label}）</b>` : '<span class="warn">このブラウザは音声の書き出しに対応していないため、映像のみになります</span>'}`;
   if (xp.enc.muxCodec !== 'avc') msg += `<br><span class="warn">このブラウザでは H.264 が使えないため ${xp.enc.label} になります。iPhone の写真アプリや一部の SNS では再生・投稿できないことがあります（Chrome / Edge / Safari なら H.264 で書き出せます）。</span>`;
-  if (xp.aenc && xp.aenc.muxCodec !== 'aac') msg += `<br><span class="warn">AAC が使えないため音声は ${xp.aenc.label} になります。iPhone の写真アプリや一部の SNS では音が出ない・投稿できないことがあります。</span>`;
   info.innerHTML = msg;
 }
 
@@ -593,14 +664,12 @@ function openExport() {
   $('#xp-progress').hidden = true;
   $('#xp-start').disabled = false;
   $('#xp-close').textContent = '閉じる';
-  xp.sound = state.sound;
-  $('#xp-snd').querySelectorAll('button').forEach((x) => x.classList.toggle('on', x.dataset.v === xp.sound));
   refreshExportInfo();
 }
 
 async function startExport() {
   if (xp.running) return;
-  if (!xp.enc) { $('#xp').hidden = true; startRecording(xp.sound); return; }
+  if (!xp.enc) { $('#xp').hidden = true; startRecording(); return; }
   xp.running = true;
   state.exporting = true;
   xp.abort = new AbortController();
@@ -612,14 +681,8 @@ async function startExport() {
   const f = state.film;
   const dur = xp.limit > 0 ? Math.min(xp.limit, f.duration) : f.duration;
   try {
-    let audioTrack;
-    if (xp.aenc) {
-      $('#xp-status').textContent = '音声を生成中…';
-      const buffer = await renderScoreOffline(buildScore(f, state.seed, xp.sound), state.seed, dur);
-      audioTrack = { buffer, enc: xp.aenc };
-    }
     const blob = await exportFrames({
-      canvas, fps: xp.fps, enc: xp.enc, duration: dur, signal: xp.abort.signal, audio: audioTrack,
+      canvas, fps: xp.fps, enc: xp.enc, duration: dur, signal: xp.abort.signal,
       renderAt: (t) => f.render(renderer, t),
       onProgress: (p, i) => {
         $('#xp-fill').style.transform = `scaleX(${p})`;
@@ -627,7 +690,7 @@ async function startExport() {
       },
     });
     download(blob, 'mp4');
-    toast(`書き出し完了（${(blob.size / 1e6).toFixed(1)} MB・${xp.enc.label}${audioTrack ? ' + ' + xp.aenc.label : ''} / MP4）`);
+    toast(`書き出し完了（${(blob.size / 1e6).toFixed(1)} MB・${xp.enc.label} / MP4）`);
     $('#xp').hidden = true;
   } catch (e) {
     if (e.name === 'AbortError') toast('書き出しを中止しました');
@@ -670,7 +733,6 @@ function wake() {
 function seekTo(clientX) {
   const r = $('#seek').getBoundingClientRect();
   state.t = Math.max(0, Math.min(1, (clientX - r.left) / r.width)) * state.film.duration;
-  syncAudio();
   poke();
 }
 
@@ -681,19 +743,20 @@ function jump(dir) {
   let i = starts.findIndex((s, k) => state.t >= s && (k === starts.length - 1 || state.t < starts[k + 1]));
   i = Math.max(0, Math.min(starts.length - 1, i + dir));
   state.t = starts[i];
-  syncAudio();
   poke();
 }
 
 // ---------------------------------------------------------------- イベント
 
 const hashAdv = readHash();
-{
-  let snd = 'full';
-  try { snd = localStorage.getItem(storageKey('hg-sound')) || 'full'; } catch { /* プライベートモード等 */ }
-  state.sound = SOUND_MODES.includes(snd) ? snd : 'full';
-}
 $('#seed').value = state.seed;
+// オープニング・エンディングのボタンは演出の一覧から作る（演出を足すと自動で増える）
+for (const cat of ['opener', 'closer']) {
+  $('#' + cat).insertAdjacentHTML('beforeend', catalogKeys(cat).map((k) => `<button data-v="${k}">${labelOf(cat, k)[0]}</button>`).join(''));
+}
+// スタイルも同じ（ミックスは最後に）
+$('#style').insertAdjacentHTML('beforeend', catalogKeys('style').filter((k) => k !== 'MIX').map((k) => `<button data-v="${k}">${labelOf('style', k)[0]}</button>`).join('')
+  + '<button data-v="MIX" title="作品ごとにスタイルを抽選">ミックス</button>');
 bindSeg('#aspect', 'aspect');
 bindSeg('#pace', 'pace');
 bindSeg('#style', 'style');
@@ -708,7 +771,9 @@ for (const id of ['#artist', '#subline', '#handle']) $(id).addEventListener('inp
 $('#seed').addEventListener('input', (e) => { state.seed = e.target.value.trim().toUpperCase() || randomSeed(); state.film = null; });
 $('#dice').addEventListener('click', () => { state.seed = randomSeed(); $('#seed').value = state.seed; state.film = null; });
 
-$('#pick').addEventListener('click', () => $('#file').click());
+// ドロップ欄そのものを押すとファイルを選べる（ボタンはトップにだけ置く）
+$('#drop').addEventListener('click', () => $('#file').click());
+$('#drop').addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $('#file').click(); } });
 let scrollToDrop = false; // トップのボタンから読み込んだら、読み込み後に作品一覧まで送る
 $('#file').addEventListener('change', async (e) => {
   const files = e.target.files;
@@ -718,9 +783,21 @@ $('#file').addEventListener('change', async (e) => {
   e.target.value = '';
   if (fromHero) $('#drop').scrollIntoView({ behavior: 'smooth', block: 'start' });
 });
-$('#sample').addEventListener('click', () => {
-  addSources(makeSamples('samples').map((s) => ({ src: s.canvas, name: s.name })));
-});
+// サンプルを読み込む（files を渡すとその組、なければ 6〜8 点をランダムに）
+async function loadSamples(files) {
+  let list;
+  body.classList.add('busy');
+  try {
+    list = await fetchSamples(files ? samplesByFile(files) : pickSamples());
+  } catch (e) {
+    console.warn(e);
+    toast('サンプルを読み込めませんでした');
+    return;
+  } finally {
+    body.classList.remove('busy');
+  }
+  await addSources(list);
+}
 
 // ---------------------------------------------------------------- トップの作例動画
 
@@ -745,7 +822,7 @@ function setupHero() {
 }
 $('#hero-pick').addEventListener('click', () => { scrollToDrop = true; $('#file').click(); });
 $('#hero-sample').addEventListener('click', async () => {
-  await addSources(makeSamples('samples').map((s) => ({ src: s.canvas, name: s.name })));
+  await loadSamples();
   $('#drop').scrollIntoView({ behavior: 'smooth', block: 'start' });
 });
 setupHero();
@@ -788,7 +865,7 @@ setupLogo();
   const REPO = 'https://github.com/shironagasu-ai/hayagawari';
   $('#ver-kicker').textContent = `v${VERSION}`;
   const build = BUILD.commit === 'dev' ? '開発版' : `<a href="${REPO}/commit/${BUILD.commit}" target="_blank" rel="noopener">${BUILD.commit}</a> ・ ${BUILD.date}`;
-  $('#ver').innerHTML = `HAYAGAWARI v${VERSION} ・ ${build} ・ <a href="${REPO}/releases" target="_blank" rel="noopener">更新履歴</a> ・ <a href="${REPO}" target="_blank" rel="noopener">GitHub</a>`;
+  $('#ver').innerHTML = `HAYAGAWARI v${VERSION} ・ ${build} ・ <a href="#catalog">演出カタログ</a> ・ <a href="${REPO}/releases" target="_blank" rel="noopener">更新履歴</a> ・ <a href="${REPO}" target="_blank" rel="noopener">GitHub</a>`;
   // PR のプレビューでは、本番と見分けられるよう常に表示する
   if (PREVIEW) {
     const a = document.createElement('a');
@@ -833,20 +910,27 @@ window.addEventListener('popstate', () => {
   if (body.classList.contains('playing') && player.entry) toEditor({ fromHistory: true });
 });
 $('#export').addEventListener('click', openExport);
-$('#snd').addEventListener('click', () => { audio.unlock(); setSound(SOUND_MODES[(SOUND_MODES.indexOf(state.sound) + 1) % SOUND_MODES.length]); });
 $('#xp-start').addEventListener('click', startExport);
 $('#xp-close').addEventListener('click', () => { if (xp.running) xp.abort.abort(); else $('#xp').hidden = true; });
-for (const [id, key] of [['#xp-res', 'res'], ['#xp-fps', 'fps'], ['#xp-snd', 'sound']]) {
+for (const [id, key] of [['#xp-res', 'res'], ['#xp-fps', 'fps']]) {
   $(id).addEventListener('click', (e) => {
     const b = e.target.closest('button');
     if (!b || xp.running) return;
-    xp[key] = key === 'sound' ? b.dataset.v : Number(b.dataset.v);
+    xp[key] = Number(b.dataset.v);
     $(id).querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
     refreshExportInfo();
   });
 }
 $('#rec-cancel').addEventListener('click', () => { recCancelled = true; finishRecording(); });
-$('#fs').addEventListener('click', () => (document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen?.()));
+// 全画面: iPhone の Safari はページの全画面に対応していないので、使えないブラウザではボタンを出さない（古い Safari は webkit 付き）
+const canFullscreen = !!(document.fullscreenEnabled || document.webkitFullscreenEnabled);
+$('#fs').hidden = !canFullscreen;
+$('#fs').addEventListener('click', () => {
+  if (!canFullscreen) return;
+  if (fullscreenEl()) { exitFullscreen(); return; }
+  const el = document.documentElement;
+  (el.requestFullscreen || el.webkitRequestFullscreen)?.call(el);
+});
 
 const seek = $('#seek');
 seek.addEventListener('pointerdown', (e) => {
@@ -877,12 +961,10 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'f' || e.key === 'F') $('#fs').click();
   else if (e.key === 'e' || e.key === 'E') toEditor();
   else if (e.key === 'p' || e.key === 'P') body.classList.toggle('perf');
-  else if (e.key === 'm' || e.key === 'M') $('#snd').click();
   wake();
 });
 document.addEventListener('visibilitychange', () => { if (document.hidden && recorder) toast('録画中はタブを前面にしてください'); });
 
-setSound(state.sound);
 resize();
 {
   let open = false;
@@ -896,12 +978,56 @@ resize();
 }
 restoreSession();
 
+// ---------------------------------------------------------------- 演出カタログ（#catalog）
+
+let catalogWorks = null; // 読み込み中の Promise（同時に呼ばれても 1 回だけ読む）
+function loadCatalogWorks() {
+  if (!catalogWorks) {
+    catalogWorks = (async () => {
+      // 横長（16:9）・縦長（3:4）・縦長（9:16）を 1 点ずつ。どの演出も同じ組で見比べる
+      const list = await fetchSamples(samplesByFile(['kite-weather', 'ranunculus', 'seaside-descent']));
+      const works = [];
+      for (const s of list) {
+        const w = await analyzeImage(s.src, s.name);
+        w.title = s.title;
+        w.focal = s.focal;
+        w.tex = renderer.createTexture(w.source);
+        works.push(w);
+      }
+      return works;
+    })();
+    catalogWorks.catch(() => { catalogWorks = null; }); // 失敗したら次に開いたときに読み直す
+  }
+  return catalogWorks;
+}
+const catalog = initCatalog({
+  renderer,
+  loadWorks: loadCatalogWorks,
+  restore: () => resize(),
+  play: async (cat, key) => {
+    const works = await loadCatalogWorks();
+    tf.dispose();
+    const { film, win } = catalogFilm(cat, key, works, tf);
+    state.film = film;
+    state.catalogFilm = true;
+    resize();
+    renderMarks();
+    state.t = win[0];
+    play(false);
+  },
+});
+window.addEventListener('hashchange', () => catalog.sync());
+catalog.sync();
+
 // テスト・デバッグ用フック
 window.__hg = {
-  version: VERSION, build: BUILD,
+  version: VERSION, build: BUILD, catalog,
+  fx: { CATEGORIES, labelOf, catalogKeys, catalogFilm, loadWorks: () => loadCatalogWorks(), TextFactory, AVOID_DECOR },
   state, renderer, tf,
-  build, play, pause, reroll, toEditor, setAdvOpen, openExport, xp, audio, setSound,
-  loadSamples: () => addSources(makeSamples('samples').map((s) => ({ src: s.canvas, name: s.name }))),
+  build, play, pause, reroll, toEditor, setAdvOpen, openExport, xp,
+  // テスト用: 既定は先頭 6 点の決まった組（ボタンからはランダム）
+  samples: { SAMPLES, pickSamples },
+  loadSamples: (files = SAMPLES.slice(0, 6).map((x) => x.file)) => loadSamples(files),
   renderAt: (t) => { state.film.render(renderer, t); state.t = t; },
   resize, // resize(scale): 仮想解像度 × scale で描く（tools/make-hero.mjs 用）
   // GPU に溜まった描画命令を最後まで実行させる（1px 読み出しで同期。gl.finish は Chrome では待たない）

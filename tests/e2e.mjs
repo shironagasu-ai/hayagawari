@@ -12,7 +12,7 @@ try { ({ chromium } = await import('playwright-core')); } catch { ({ chromium } 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const outDir = join(root, 'tests', 'output');
 mkdirSync(outDir, { recursive: true });
-const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.jpg': 'image/jpeg', '.mp4': 'video/mp4', '.woff2': 'font/woff2' };
+const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.jpg': 'image/jpeg', '.mp4': 'video/mp4', '.woff2': 'font/woff2', '.webp': 'image/webp' };
 const server = createServer((req, res) => {
   // /pr/<N>/ は PR プレビューの公開場所を模したもの（中身は同じ）
   let p = join(root, decodeURIComponent(req.url.split('?')[0].split('#')[0]).replace(/^\/pr\/\d+\//, '/'));
@@ -101,10 +101,32 @@ async function sheet(page, file, rows) {
   await page.waitForFunction(() => window.__hg.state.works.length === 6, null, { timeout: 30000 });
   const focal = await page.evaluate(() => window.__hg.state.works.map((w) => ({ name: w.name, f: w.focal.map((p) => [+p.x.toFixed(2), +p.y.toFixed(2), +p.size.toFixed(2)]) })));
   console.log('focal points:', JSON.stringify(focal));
-  // 顔サンプルは目（y≈0.43, x≈0.41/0.59）付近を検出してほしい
-  const face = focal.find((w) => w.name === 'Aqua Gaze');
-  const nearEyes = face.f.some(([x, y]) => Math.abs(y - 0.44) < 0.12 && Math.abs(x - 0.5) < 0.2);
-  check('portrait sample: focal near eyes', nearEyes);
+  // サンプルは手で決めた注目点で読み込まれる（Ranunculus の 1 番は顔）
+  const ranun = focal.find((w) => w.name === 'Ranunculus');
+  check('sample uses its preset focal points', ranun && Math.abs(ranun.f[0][0] - 0.6) < 0.01 && Math.abs(ranun.f[0][1] - 0.3) < 0.01, JSON.stringify(ranun));
+  // 自動検出（解析）そのもの: Ranunculus の花（x≈0.75, y≈0.42）を拾う
+  const auto = await page.evaluate(() => window.__hg.state.works.find((w) => w.name === 'Ranunculus').autoFocal.map((p) => [p.x, p.y]));
+  check('auto focal finds the flower in Ranunculus', auto.some(([x, y]) => Math.abs(x - 0.75) < 0.1 && Math.abs(y - 0.42) < 0.1), JSON.stringify(auto));
+  // 全サンプルの画像が読めて、ランダムの組は 6〜8 点・重複なし
+  const smp = await page.evaluate(async () => {
+    const { SAMPLES, pickSamples } = window.__hg.samples;
+    const bad = [];
+    for (const x of SAMPLES) {
+      const r = await fetch(`assets/samples/${x.file}.webp`);
+      try { if (!r.ok) throw new Error(r.status); await createImageBitmap(await r.blob()); } catch (e) { bad.push(`${x.file}: ${e.message}`); }
+      if (!x.title || x.focal.length < 1) bad.push(`${x.file}: no title/focal`);
+    }
+    const sizes = new Set();
+    let dup = 0;
+    for (let i = 0; i < 100; i++) {
+      const l = pickSamples(`t${i}`);
+      sizes.add(l.length);
+      if (new Set(l.map((x) => x.file)).size !== l.length) dup++;
+    }
+    return { n: SAMPLES.length, bad, sizes: [...sizes].sort(), dup };
+  });
+  check('every sample image loads', smp.bad.length === 0 && smp.n >= 8, JSON.stringify(smp.bad));
+  check('random sample set is 6-8 distinct works', JSON.stringify(smp.sizes) === '[6,7,8]' && smp.dup === 0, JSON.stringify(smp));
 
   await page.click('#go');
   await page.waitForTimeout(300);
@@ -176,20 +198,41 @@ async function sheet(page, file, rows) {
   }
   // オープニング / エンディング / 振付を全種描いて確認
   const T = [0.08, 0.2, 0.35, 0.5, 0.65, 0.8, 0.95];
-  const opKeys = ['montage', 'type', 'shutter', 'countdown', 'knockout', 'slice', 'tunnel', 'boot'];
-  const clKeys = ['grid', 'filmstrip', 'stack', 'knockout', 'orbit', 'curtain', 'rewind'];
-  const vKeys = await page.evaluate(async () => (await import('/src/director.js')).VARIANT_KEYS());
+  // 演出の一覧はカタログと同じ登録元から取る（演出を足してもテストを書き換えずに済む）
+  const opKeys = await page.evaluate(() => window.__hg.fx.catalogKeys('opener'));
+  const clKeys = await page.evaluate(() => window.__hg.fx.catalogKeys('closer'));
+  const vKeys = await page.evaluate(() => window.__hg.fx.catalogKeys('variant'));
   await page.evaluate(() => { window.__hg.setOpt('style', 'NOIR'); window.__hg.setSeed('COVER-01'); });
   await sheet(page, 'sheet-openers.png', opKeys.map((k) => ({ key: 'opener', value: k, seg: 0, times: T })));
   await sheet(page, 'sheet-closers.png', clKeys.map((k) => ({ key: 'closer', value: k, seg: 'last', times: T })));
   await sheet(page, 'sheet-variants.png', vKeys.map((k) => ({ key: 'variant', value: k, seg: 1, times: T })));
   const picked = await page.evaluate(() => { const f = window.__hg.state.film; return [f.opener, f.closer, f.segments[1].variant]; });
   check('opener/closer/variant overrides applied', picked[0] === opKeys[opKeys.length - 1] && picked[1] === clKeys[clKeys.length - 1] && picked[2] === vKeys[vKeys.length - 1], picked.join(','));
+  // 縦長（9:16・3:4）と 4:3 でも崩れないか目視確認用
+  for (const asp of ['9:16', '4:3', '3:4']) {
+    const tag = asp.replace(':', 'x');
+    await page.evaluate((a) => { window.__hg.setOpt('aspect', a); window.__hg.resize(); }, asp);
+    await sheet(page, `sheet-openers-${tag}.png`, opKeys.map((k) => ({ key: 'opener', value: k, seg: 0, times: T })));
+    await sheet(page, `sheet-closers-${tag}.png`, clKeys.map((k) => ({ key: 'closer', value: k, seg: 'last', times: T })));
+    await sheet(page, `sheet-variants-${tag}.png`, vKeys.map((k) => ({ key: 'variant', value: k, seg: 1, times: T })));
+  }
+  await page.evaluate(() => { window.__hg.setOpt('aspect', '16:9'); window.__hg.resize(); });
   check('9 choreographies available', vKeys.length >= 9, vKeys.join(','));
+  // おまかせで出うるか: 見せ方・切り替え・背景の飾り・配色は、どれか 1 つ以上のスタイルで重みが付いていること
+  const unreachable = await page.evaluate(async () => {
+    const { THEMES } = await import('/src/fx/themes.js');
+    const { catalogKeys } = window.__hg.fx;
+    const out = [];
+    for (const [cat, field] of [['variant', 'variants'], ['transition', 'trans'], ['decor', 'decor'], ['palette', 'palettes']]) {
+      for (const k of catalogKeys(cat)) if (!Object.values(THEMES).some((th) => ((th[field] || {})[k] || 0) > 0)) out.push(`${cat}:${k}`);
+    }
+    return out;
+  });
+  check('every variant / transition / decor / palette can be picked automatically', unreachable.length === 0, unreachable.join(', '));
 
   // スタイル: 全9種とミックス（作品ごとに抽選・連続しない）
   const styleKeys = await page.evaluate(async () => (await import('/src/director.js')).STYLE_KEYS());
-  check('9 styles', styleKeys.length === 9, styleKeys.join(','));
+  check('at least 9 styles', styleKeys.length >= 9, styleKeys.join(','));
   await page.evaluate(() => window.__hg.setOpt('opener', 'auto'));
   await sheet(page, 'sheet-styles.png', styleKeys.map((k) => ({ key: 'style', value: k, seg: 1, times: [0.15, 0.45, 0.75, 0.95] })));
   const mix = await page.evaluate(() => {
@@ -205,7 +248,7 @@ async function sheet(page, file, rows) {
   const autoSub = await page.evaluate(() => {
     document.querySelector('#artist').value = 'SOMEONE'; document.querySelector('#subline').value = '';
     const bad = [];
-    for (const op of ['montage', 'type', 'shutter', 'countdown', 'knockout', 'slice', 'tunnel', 'boot']) {
+    for (const op of window.__hg.fx.catalogKeys('opener')) {
       window.__hg.setOpt('opener', op); window.__hg.setOpt('style', 'NOIR'); window.__hg.build();
       for (const k of window.__hg.tf.cache.keys()) if (/PORTFOLIO|SELECTED WORKS/.test(k.split('|')[0])) bad.push(op + ':' + k.split('|')[0]);
     }
@@ -218,17 +261,22 @@ async function sheet(page, file, rows) {
   const seen = await page.evaluate(() => {
     window.__hg.setOpt('opener', 'auto'); window.__hg.setOpt('closer', 'auto'); window.__hg.setOpt('variant', null);
     const o = new Set(), c = new Set(), v = new Set(), tr = new Set();
-    for (let i = 0; i < 60; i++) {
+    const clash = [];
+    // 候補が増えても取りこぼさないよう多めに（16 種を 200 回なら、1 種でも出ない確率は 1e-4 程度）
+    for (let i = 0; i < 200; i++) {
       window.__hg.setSeed('S' + i); window.__hg.setOpt('style', 'auto'); window.__hg.build();
       const f = window.__hg.state.film;
       o.add(f.opener); c.add(f.closer);
       f.summary.forEach((s) => { if (s.variant) v.add(s.variant); if (s.out) tr.add(s.out); });
+      // 合わない組み合わせ（見せ方 × 背景の飾り）が出ていないか
+      f.summary.forEach((s) => { if (s.kind === 'work') for (const d of s.decor) if ((window.__hg.fx.AVOID_DECOR[s.variant] || []).includes(d)) clash.push(`${s.variant}+${d}`); });
     }
-    return { o: o.size, c: c.size, v: v.size, tr: [...tr].sort().join(',') };
+    return { o: o.size, c: c.size, v: v.size, tr: [...tr].sort().join(','), clash };
   });
   console.log('auto coverage:', JSON.stringify(seen));
   check('auto picks all openers/closers', seen.o === opKeys.length && seen.c === clKeys.length, `${seen.o}/${seen.c}`);
   check('auto uses new transitions', seen.tr.includes('spin') && seen.tr.includes('door'));
+  check('no clashing variant + decor pairs', seen.clash.length === 0, seen.clash.slice(0, 5).join(', '));
 
   // 注目点エディタ: 開く → ドラッグ移動 → 追加 → 1番にする → 削除 → 自動に戻す
   await page.evaluate(() => window.__hg.toEditor());
@@ -361,11 +409,12 @@ async function sheet(page, file, rows) {
   const info = await page.textContent('#xp-info');
   console.log('export info:', info.replace(/\s+/g, ' ').slice(0, 160));
   check('frame export available', info.includes('1コマずつ'), info);
-  check('export includes audio by default', /音声: .*(AAC|Opus)/.test(info), info);
-  const vcodec = (info.match(/1コマずつ（(\S+) \/ MP4）/) || [])[1], acodec = (info.match(/音声: [^（]*（(\S+)）/) || [])[1];
-  console.log(`codecs: video=${vcodec} audio=${acodec}`);
-  // CI の Google Chrome では H.264 で書き出せるはず（AAC は Linux 版では無いことがあるので記録のみ）
-  if (process.env.EXPECT_H264 === '1') check('H.264 available in Google Chrome', vcodec === 'H.264', `video=${vcodec} audio=${acodec}`);
+  const noSoundUi = await page.evaluate(() => !document.querySelector('#snd') && !document.querySelector('#xp-snd'));
+  check('no sound controls (v1.0.0 has no sound)', !info.includes('音声') && noSoundUi, info);
+  const vcodec = (info.match(/1コマずつ（(\S+) \/ MP4）/) || [])[1];
+  console.log(`codecs: video=${vcodec}`);
+  // CI の Google Chrome では H.264 で書き出せるはず
+  if (process.env.EXPECT_H264 === '1') check('H.264 available in Google Chrome', vcodec === 'H.264', `video=${vcodec}`);
   // GPU なし（ソフトウェア描画＋ソフトウェア VP9）だと 1 秒あたり約 2 コマなので、先頭 3 秒だけ書き出す
   await page.evaluate(() => { window.__hg.xp.limit = 3; });
   const t0 = Date.now();
@@ -379,18 +428,7 @@ async function sheet(page, file, rows) {
   const head = readFileSync(file).subarray(4, 8).toString('latin1');
   check('mp4 starts with ftyp', head === 'ftyp', head);
   const bytes = readFileSync(file).toString('latin1');
-  check('mp4 has an audio track', bytes.includes('soun') && (bytes.includes('Opus') || bytes.includes('mp4a')));
-  const aud = await page.evaluate(async () => {
-    const buf = await window.__hg.state.lastExport.blob.arrayBuffer();
-    const ctx = new OfflineAudioContext(2, 48000, 48000);
-    const ab = await ctx.decodeAudioData(buf);
-    const d = ab.getChannelData(0);
-    let sum = 0, peak = 0;
-    for (let i = 0; i < d.length; i++) { sum += d[i] * d[i]; peak = Math.max(peak, Math.abs(d[i])); }
-    return { dur: ab.duration, rms: Math.sqrt(sum / d.length), peak };
-  });
-  console.log('audio:', JSON.stringify(aud));
-  check('exported audio decodes with sound', Math.abs(aud.dur - 3) < 0.15 && aud.rms > 0.01 && aud.peak <= 1.0, JSON.stringify(aud));
+  check('mp4 has no audio track', !bytes.includes('soun'));
   const v = await page.evaluate(async () => {
     const blob = window.__hg.state.lastExport.blob;
     const film = window.__hg.state.film;
@@ -430,29 +468,6 @@ async function sheet(page, file, rows) {
   check('exported duration matches film', Math.abs(v.dur - v.expected) < 0.2, `${v.dur} vs ${v.expected}`);
   check('exported frames have content', v.stats.every((x) => x > 3), JSON.stringify(v.stats));
   check('renderer restored after export', await page.evaluate(() => window.__hg.renderer.bw < 1920 && !document.body.classList.contains('exporting')));
-  // 楽譜: モードごとの音数・決定性
-  const sc = await page.evaluate(async () => {
-    const { buildScore } = await import('/src/audio.js');
-    const f = window.__hg.state.film, seed = window.__hg.state.seed;
-    const full = buildScore(f, seed, 'full'), sfx = buildScore(f, seed, 'sfx'), off = buildScore(f, seed, 'off');
-    const again = buildScore(f, seed, 'full');
-    return { full: full.notes.length, sfx: sfx.notes.length, off: off.notes.length, beat: full.notes.filter((n) => n.layer === 'beat').length, same: JSON.stringify(full.notes) === JSON.stringify(again.notes) };
-  });
-  console.log('score:', JSON.stringify(sc));
-  check('score: full > sfx > off=0, deterministic', sc.full > sc.sfx && sc.sfx > 0 && sc.off === 0 && sc.beat > 0 && sc.same);
-  // 音声なしで書き出すと音声トラックが無い
-  await page.click('#export');
-  await page.click('#xp-snd button[data-v="off"]');
-  await page.waitForFunction(() => !document.querySelector('#xp-info').textContent.includes('判定中'));
-  await page.evaluate(() => { window.__hg.xp.limit = 1; });
-  const [dl2] = await Promise.all([page.waitForEvent('download', { timeout: 300000 }), page.click('#xp-start')]);
-  const file2 = join(outDir, 'export-mute.mp4');
-  await dl2.saveAs(file2);
-  check('sound off → no audio track', !readFileSync(file2).toString('latin1').includes('soun'));
-  // プレーヤーの音ボタンが 3 段階で切り替わる
-  const labels = [];
-  for (let k = 0; k < 3; k++) { await page.click('#snd'); labels.push(await page.textContent('#snd')); }
-  check('sound button cycles', labels.join('|').includes('効果音のみ') && labels.join('|').includes('なし') && labels.join('|').includes('ビート'), labels.join('|'));
   // 中止できること
   await page.click('#export');
   await page.waitForFunction(() => !document.querySelector('#xp-info').textContent.includes('判定中'));
@@ -541,17 +556,88 @@ async function sheet(page, file, rows) {
   check('preview badge shown', badge && badge.text.includes('PR #42') && badge.href.endsWith('/pull/42'), JSON.stringify(badge));
   await page.evaluate(() => window.__hg.loadSamples());
   await page.waitForFunction(() => window.__hg.state.works.length === 6, null, { timeout: 30000 });
-  await page.evaluate(() => window.__hg.setSound('sfx'));
+  await page.evaluate(() => window.__hg.setAdvOpen(true)); // localStorage に書く設定の例
   await page.waitForTimeout(1200);
   const st = await page.evaluate(async () => ({
     dbs: (await indexedDB.databases()).map((d) => d.name),
     ls: Object.keys(localStorage),
   }));
-  check('preview uses separate storage', st.dbs.includes('hayagawari-pr42') && !st.dbs.includes('hayagawari') && st.ls.includes('pr42:hg-sound') && !st.ls.includes('hg-sound'), JSON.stringify(st));
+  check('preview uses separate storage', st.dbs.includes('hayagawari-pr42') && !st.dbs.includes('hayagawari') && st.ls.includes('pr42:hg-adv') && !st.ls.includes('hg-adv'), JSON.stringify(st));
   // 本番のパスではバッジが出ない
   await page.goto('http://localhost:8941/', { waitUntil: 'networkidle' });
   check('no preview badge on production path', await page.evaluate(() => !document.querySelector('#preview-badge') && window.__hg.state.works.length === 0));
   check('no page errors (preview)', errors.length === 0, errors.join('\n'));
+  await page.close();
+}
+
+// ---- 9. 全カテゴリの全演出: それぞれの見本の映像が描けて（真っ黒・単色にならず）、説明があり、描画命令が多すぎない
+{
+  const { page, errors } = await openPage({ width: 1280, height: 800 }, '#catalog');
+  const res = await page.evaluate(async () => {
+    const { CATEGORIES, catalogKeys, catalogFilm, labelOf, loadWorks, TextFactory } = window.__hg.fx;
+    const r = window.__hg.renderer;
+    const works = await loadWorks();
+    const tf = new TextFactory(r);
+    const c = document.createElement('canvas'); c.width = 64; c.height = 36;
+    const g = c.getContext('2d', { willReadFrequently: true });
+    const out = [];
+    for (const { key: cat } of CATEGORIES) {
+      for (const key of catalogKeys(cat)) {
+        tf.dispose();
+        const { film, win } = catalogFilm(cat, key, works, tf);
+        r.setSize(1920, 1080, 320, 180);
+        let flat = 0, maxDraws = 0;
+        for (let i = 0; i < 5; i++) {
+          film.render(r, win[0] + (win[1] - win[0]) * ((i + 0.5) / 5));
+          maxDraws = Math.max(maxDraws, r.drawCalls);
+          g.drawImage(r.canvas, 0, 0, 64, 36);
+          const d = g.getImageData(0, 0, 64, 36).data;
+          let s1 = 0, s2 = 0;
+          for (let k = 0; k < d.length; k += 4) { const v = (d[k] + d[k + 1] + d[k + 2]) / 3; s1 += v; s2 += v * v; }
+          const n = d.length / 4, m = s1 / n;
+          if (Math.sqrt(Math.max(0, s2 / n - m * m)) < 2) flat++;
+        }
+        out.push({ cat, key, flat, maxDraws, desc: labelOf(cat, key)[1] });
+      }
+    }
+    return out;
+  });
+  const byCat = {};
+  for (const x of res) (byCat[x.cat] = byCat[x.cat] || []).push(x.key);
+  console.log('catalog:', Object.entries(byCat).map(([c, k]) => `${c}=${k.length}`).join(' '), '| max draws', Math.max(...res.map((x) => x.maxDraws)));
+  const flat = res.filter((x) => x.flat > 1);
+  check('every effect renders (not flat)', flat.length === 0, flat.map((x) => `${x.cat}:${x.key}(${x.flat}/5)`).join(', '));
+  const noDesc = res.filter((x) => !x.desc);
+  check('every effect has a label and description', noDesc.length === 0, noDesc.map((x) => `${x.cat}:${x.key}`).join(', '));
+  const heavy = res.filter((x) => x.maxDraws > 600);
+  check('no effect exceeds the draw-call budget (600)', heavy.length === 0, heavy.map((x) => `${x.cat}:${x.key}=${x.maxDraws}`).join(', '));
+  // カタログのページ: タブとカードが出て、見えているカードのコマ見本が描かれる
+  await page.waitForFunction(() => document.querySelectorAll('.cat-card.ready').length >= 2, null, { timeout: 120000 });
+  const ui = await page.evaluate(() => ({ tabs: document.querySelectorAll('#cat-tabs button').length, cards: document.querySelectorAll('.cat-card').length, first: window.__hg.fx.catalogKeys('opener').length }));
+  check('catalog page lists every opener', ui.tabs === 7 && ui.cards === ui.first, JSON.stringify(ui));
+  // 一覧のまま、画面中央のカードがその場で再生される（コマが変わっていく）
+  await page.waitForFunction(() => document.querySelector('.cat-card.live'), null, { timeout: 60000 });
+  const liveMoves = await page.evaluate(async () => {
+    const cv = document.querySelector('.cat-card.live canvas');
+    const snap = () => { const c = document.createElement('canvas'); c.width = 32; c.height = 18; const g = c.getContext('2d'); g.drawImage(cv, 0, 0, 32, 18); return g.getImageData(0, 0, 32, 18).data; };
+    const a = snap();
+    await new Promise((r) => setTimeout(r, 700));
+    const b = snap();
+    let d = 0;
+    for (let i = 0; i < a.length; i++) d += Math.abs(a[i] - b[i]);
+    return d / a.length;
+  });
+  check('catalog card plays inline', liveMoves > 0.5, liveMoves.toFixed(2));
+  await page.click('#cat-tabs button[data-v="transition"]');
+  await page.waitForFunction(() => location.hash === '#catalog=transition' && document.querySelectorAll('.cat-card[data-cat="transition"]').length > 0);
+  // 見本を再生 → 戻るとカタログに戻り、本編の映像は作り直される
+  await page.click('.cat-card .cat-play');
+  await page.waitForFunction(() => document.body.classList.contains('playing') && window.__hg.state.catalogFilm);
+  await page.waitForTimeout(400);
+  await page.evaluate(() => window.__hg.toEditor());
+  check('catalog playback returns to catalog', await page.evaluate(() => !document.querySelector('#catalog').hidden && !window.__hg.state.film && !window.__hg.state.catalogFilm));
+  await page.screenshot({ path: join(outDir, 'catalog.png') });
+  check('no page errors (catalog)', errors.length === 0, errors.join('\n'));
   await page.close();
 }
 
@@ -564,6 +650,7 @@ async function sheet(page, file, rows) {
   const inPlayer = () => page.evaluate(() => document.body.classList.contains('playing'));
   await page.click('#go');
   check('back button visible in player', await page.evaluate(() => document.querySelector('#back').checkVisibility()));
+  check('fullscreen button shown where supported', await page.evaluate(() => document.querySelector('#fs').checkVisibility()));
   // 操作が隠れるまで待つ → 戻るは薄く残り、画面のタップでは止まらず操作が出る
   await page.waitForFunction(() => document.body.classList.contains('idle'), null, { timeout: 10000 });
   await page.waitForTimeout(500); // 薄くなるアニメーションが終わるまで
@@ -596,6 +683,106 @@ async function sheet(page, file, rows) {
   await page.close();
 }
 
+// ---- 12. 詳細設定からカタログへ／全画面に対応していないブラウザでは全画面ボタンを出さない
+{
+  const { page, errors } = await openPage({ width: 1280, height: 800 });
+  await page.evaluate(() => window.__hg.setAdvOpen(true));
+  const links = await page.evaluate(() => [...document.querySelectorAll('#adv a.cat-link')].map((a) => a.getAttribute('href')));
+  check('advanced settings link to the catalog', JSON.stringify(links) === JSON.stringify(['#catalog=style', '#catalog=opener', '#catalog=closer']), links.join(','));
+  await page.click('#adv a[href="#catalog=closer"]');
+  await page.waitForFunction(() => !document.querySelector('#catalog').hidden, null, { timeout: 10000 });
+  check('catalog link opens that category', await page.evaluate(() => window.__hg.catalog.current === 'closer'));
+  await page.click('#cat-back');
+  await page.waitForFunction(() => document.querySelector('#catalog').hidden, null, { timeout: 10000 });
+  check('back from catalog keeps advanced settings open', await page.evaluate(() => document.querySelector('#adv').open && window.__hg.state.advOpen));
+  check('no page errors (catalog links)', errors.length === 0, errors.join('\n'));
+  await page.close();
+  // iPhone の Safari 相当（ページの全画面に対応していない）
+  const ip = await browser.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+  await ip.addInitScript(() => {
+    for (const k of ['fullscreenEnabled', 'webkitFullscreenEnabled']) Object.defineProperty(Document.prototype, k, { get: () => false, configurable: true });
+  });
+  await ip.goto('http://localhost:8941/', { waitUntil: 'networkidle' });
+  await ip.waitForFunction(() => window.__hg, null, { timeout: 30000 });
+  check('fullscreen button hidden where unsupported (iPhone)', await ip.evaluate(() => document.querySelector('#fs').hidden));
+  await ip.close();
+}
+
+// ---- 13. 作品の並べ替え: マウスはカードを掴んで動かす／タッチは番号札か長押し／隙間や最後尾にも落とせる／クリックは注目点エディタ
+{
+  const names = (page) => page.evaluate(() => window.__hg.state.works.map((w) => w.name));
+  const center = (page, sel) => page.evaluate((s) => { const r = document.querySelector(s).getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2, r: r.right, b: r.bottom }; }, sel);
+  const { page, errors } = await openPage({ width: 1280, height: 900 });
+  await page.evaluate(() => window.__hg.loadSamples());
+  await page.waitForFunction(() => window.__hg.state.works.length === 6, null, { timeout: 30000 });
+  await page.evaluate(() => document.querySelector('#works').scrollIntoView({ block: 'center' }));
+  const n0 = await names(page);
+  // マウス: 1 枚目のサムネイルを掴んで 3 枚目の右半分へ → 3 枚目の後ろ
+  const a = await center(page, '#works .work:nth-child(1) .thumb');
+  const c = await center(page, '#works .work:nth-child(3) .thumb');
+  await page.mouse.move(a.x, a.y); await page.mouse.down();
+  await page.mouse.move(a.x + 20, a.y, { steps: 3 });
+  const ghost = await page.evaluate(() => !!document.querySelector('.sort-ghost') && document.querySelector('.work.sort-hole') !== null);
+  await page.mouse.move(c.x + 30, c.y, { steps: 8 });
+  await page.mouse.up();
+  const n1 = await names(page);
+  check('mouse drag: ghost follows while dragging', ghost);
+  check('mouse drag reorders (1st → after 3rd)', JSON.stringify(n1) === JSON.stringify([n0[1], n0[2], n0[0], n0[3], n0[4], n0[5]]), n1.join(','));
+  check('mouse drag does not open the focal editor', await page.evaluate(() => document.querySelector('#fe').hidden));
+  // 最後尾の右の隙間に落とせる
+  const last = await center(page, '#works .work:nth-child(6) .thumb');
+  const b0 = await center(page, '#works .work:nth-child(2) .thumb');
+  await page.mouse.move(b0.x, b0.y); await page.mouse.down();
+  await page.mouse.move(last.r + 40, last.y, { steps: 10 });
+  await page.mouse.up();
+  const n2 = await names(page);
+  check('drop after the last card', n2[5] === n1[1], n2.join(','));
+  // 動かさずに離す＝クリックで注目点エディタが開く
+  await page.click('#works .work:nth-child(1) .thumb');
+  check('click still opens the focal editor', await page.evaluate(() => !document.querySelector('#fe').hidden));
+  await page.evaluate(() => document.querySelector('#fe-close') ? document.querySelector('#fe-close').click() : null);
+  check('order saved to state and numbers updated', await page.evaluate(() => [...document.querySelectorAll('#works .grip')].map((g) => g.textContent.trim()).join(',') === '⠿ 01,⠿ 02,⠿ 03,⠿ 04,⠿ 05,⠿ 06'));
+  check('no page errors (reorder mouse)', errors.length === 0, errors.join('\n'));
+  await page.close();
+
+  // タッチ（スマホ）: 長押しで掴む／すぐ動かせばスクロール／番号札はすぐ掴める
+  const t = await openPage({ width: 390, height: 844 }, '', { hasTouch: true, isMobile: true });
+  await t.page.evaluate(() => window.__hg.loadSamples());
+  await t.page.waitForFunction(() => window.__hg.state.works.length === 6, null, { timeout: 30000 });
+  await t.page.evaluate(() => document.querySelector('#works').scrollIntoView({ block: 'center' }));
+  const cdp = await t.page.context().newCDPSession(t.page);
+  const touch = (type, x, y) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x, y }] });
+  const drag = async (from, to, hold) => {
+    await touch('touchStart', from.x, from.y);
+    if (hold) await t.page.waitForTimeout(hold);
+    for (let k = 1; k <= 10; k++) { await touch('touchMove', from.x + ((to.x - from.x) * k) / 10, from.y + ((to.y - from.y) * k) / 10); await t.page.waitForTimeout(16); }
+    await touch('touchEnd');
+    await t.page.waitForTimeout(100);
+  };
+  const m0 = await names(t.page);
+  const p1 = await center(t.page, '#works .work:nth-child(1) .thumb');
+  const p4 = await center(t.page, '#works .work:nth-child(4) .thumb');
+  await drag(p1, { x: p4.x + 25, y: p4.y }, 450);
+  const m1 = await names(t.page);
+  check('touch long-press drag reorders', JSON.stringify(m1) === JSON.stringify([m0[1], m0[2], m0[3], m0[0], m0[4], m0[5]]), m1.join(','));
+  const scroll0 = await t.page.evaluate(() => document.querySelector('#editor').scrollTop);
+  const q1 = await center(t.page, '#works .work:nth-child(1) .thumb');
+  await drag(q1, { x: q1.x, y: q1.y - 200 }, 0);
+  const m2 = await names(t.page);
+  check('touch quick swipe scrolls instead of reordering', JSON.stringify(m2) === JSON.stringify(m1) && await t.page.evaluate(() => !document.querySelector('.sort-ghost')), `${scroll0} ${m2.join(',')}`);
+  // スワイプの慣性スクロールが止まるのを待ってから位置を測る（実際の Chrome は慣性で少し流れ続ける）
+  await t.page.waitForFunction(() => new Promise((res) => { const ed = document.querySelector('#editor'); const a = ed.scrollTop; setTimeout(() => res(ed.scrollTop === a), 250); }), null, { timeout: 10000, polling: 300 });
+  await t.page.evaluate(() => document.querySelector('#works').scrollIntoView({ block: 'center' }));
+  await t.page.waitForTimeout(300);
+  const g1 = await center(t.page, '#works .work:nth-child(1) .grip');
+  const q2 = await center(t.page, '#works .work:nth-child(2) .thumb');
+  await drag(g1, { x: q2.x + 25, y: q2.y }, 0);
+  const m3 = await names(t.page);
+  check('touch drag from the number tag works without long-press', m3[1] === m2[0], m3.join(','));
+  check('no page errors (reorder touch)', t.errors.length === 0, t.errors.join('\n'));
+  await t.page.close();
+}
+
 // ---- 6. トップ: 作例動画・ロゴ・ボタン
 for (const [name, vp, file] of [['desktop', { width: 1440, height: 900 }, 'hero-16x9'], ['phone', { width: 390, height: 844 }, 'hero-9x16']]) {
   const { page, errors } = await openPage(vp);
@@ -613,26 +800,33 @@ for (const [name, vp, file] of [['desktop', { width: 1440, height: 900 }, 'hero-
   check(`logo built and fits (${name})`, hero.layers === 20 && hero.logoW <= hero.viewW, `${hero.logoW.toFixed(0)} <= ${hero.viewW}`);
   const poster = await page.evaluate((f) => fetch(`assets/hero/${f}.jpg`).then((r) => r.ok && r.headers.get('content-type')), file);
   check(`hero poster served (${name})`, poster === 'image/jpeg', String(poster));
+  if (name === 'desktop') {
+    // ボタンはトップにだけ。ドロップ欄は押すとファイルを選べる（プレーヤーを開く前に確かめる）
+    check('drop zone has no duplicate buttons', await page.evaluate(() => !document.querySelector('#drop button') && document.querySelectorAll('#hero-pick, #hero-sample').length === 2));
+    const [chooser] = await Promise.all([page.waitForEvent('filechooser', { timeout: 10000 }), page.click('#drop')]);
+    check('clicking the drop zone opens the file picker', chooser.isMultiple());
+  }
   // H.264 を再生できるブラウザ（一般配布の Chrome 等）では実際に動いていること、映像の再生中は止まること
   if (hero.h264) {
     await page.waitForFunction(() => document.querySelector('#hero-video').currentTime > 0.5, null, { timeout: 30000 });
     check(`hero video plays (${name})`, true);
     await page.click('#hero-sample');
-    await page.waitForFunction(() => window.__hg.state.works.length === 6, null, { timeout: 30000 });
+    await page.waitForFunction(() => window.__hg.state.works.length >= 6 && !document.body.classList.contains('busy'), null, { timeout: 30000 });
     await page.click('#go');
     await page.waitForTimeout(500);
     check(`hero video pauses during playback (${name})`, await page.evaluate(() => document.querySelector('#hero-video').paused));
   } else {
     console.log(`(hero video playback skipped: no H.264 in this browser)`);
     await page.click('#hero-sample');
-    await page.waitForFunction(() => window.__hg.state.works.length === 6, null, { timeout: 30000 });
+    await page.waitForFunction(() => window.__hg.state.works.length >= 6 && !document.body.classList.contains('busy'), null, { timeout: 30000 });
   }
   if (name === 'desktop') {
     const pkgVersion = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version;
     const ver = await page.evaluate(() => ({ kicker: document.querySelector('#ver-kicker').textContent, footer: document.querySelector('#ver').textContent, v: window.__hg.version }));
     check('version shown on site', ver.v === pkgVersion && ver.kicker === `v${pkgVersion}` && ver.footer.includes(`v${pkgVersion}`) && ver.footer.includes('更新履歴'), JSON.stringify(ver));
   }
-  check(`hero sample button loads samples (${name})`, await page.evaluate(() => window.__hg.state.works.length === 6));
+  const nHero = await page.evaluate(() => window.__hg.state.works.length);
+  check(`hero sample button loads 6-8 random samples (${name})`, nHero >= 6 && nHero <= 8, String(nHero));
   await page.evaluate(() => { document.querySelector('#editor').scrollTop = 0; });
   await page.screenshot({ path: join(outDir, `hero-${name}.png`) });
   check(`no page errors (hero ${name})`, errors.length === 0, errors.join('\n'));
