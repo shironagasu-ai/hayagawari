@@ -2,17 +2,18 @@
 import { Renderer } from './gl.js';
 import { TextFactory } from './text.js';
 import { analyzeImage } from './analyze.js';
-import { buildFilm } from './director.js';
+import { buildFilm, fitTempo } from './director.js';
 import { SAMPLES, pickSamples, samplesByFile, fetchSamples } from './samples.js';
 import { randomSeed, createRng } from './rng.js';
 import { initFocalEditor, openFocalEditor } from './focal-editor.js';
 import { pickEncoderConfig, exportFrames } from './export.js';
 import { newKey, putImage, saveSession, loadSession, requestPersist } from './store.js';
-import { song, initSong, setSongFile, clearSong, songMeta, stopPreview } from './song.js';
+import { song, initSong, setSongFile, clearSong, songMeta, stopPreview, musicPlay, musicPause, musicTime, musicLevel } from './song.js';
 import { VERSION, BUILD, PREVIEW, storageKey } from './version.js';
 import { initCatalog, catalogFilm, catalogKeys } from './catalog.js';
 import { CATEGORIES, labelOf } from './fx/labels.js';
 import { AVOID_DECOR } from './fx/rules.js';
+import { PACE } from './fx/themes.js';
 
 const $ = (s) => document.querySelector(s);
 const canvas = $('#gl');
@@ -298,8 +299,13 @@ document.addEventListener('touchmove', (e) => { if (sorter.active && e.cancelabl
 document.addEventListener('contextmenu', (e) => { if (sorter.el && sorter.armed) e.preventDefault(); }); // 長押しのメニューを出さない
 
 function estimateDuration() {
-  const beats = { tight: 6, normal: 8, relaxed: 10 }[effectiveSettings().pace];
-  return Math.round((6 + state.works.length * beats + 8) * (60 / 124));
+  const { pace } = effectiveSettings();
+  const n = state.works.length;
+  if (song.cur) {
+    const { bpm, workBeats } = fitTempo(song.cur, 124 + PACE[pace].bpm, pace, n);
+    return Math.round((6 + n * workBeats + 8) * (60 / bpm));
+  }
+  return Math.round((6 + n * PACE[pace].beats + 8) * (60 / (124 + PACE[pace].bpm)));
 }
 
 function removeWork(id) {
@@ -440,18 +446,29 @@ function build() {
     opener: S.opener === 'auto' ? null : S.opener,
     closer: S.closer === 'auto' ? null : S.closer,
     variant: state.variant || null,
+    music: song.cur ? { grid: song.cur.grid, duration: song.cur.duration } : null,
     artist: $('#artist').value.trim(), subline: $('#subline').value.trim(), handle: $('#handle').value.trim(),
   });
   state.buildMs = performance.now() - t0;
   resize();
   renderMarks();
   $('#i-style').textContent = state.film.theme;
-  $('#i-bpm').textContent = state.film.bpm;
+  $('#i-bpm').textContent = fmtBpm(state.film.bpm);
   $('#i-seed').textContent = state.seed;
   writeHash();
   scheduleSave();
   state.dirty = true;
+  if (state.playing) syncMusic(); // 再生中に作り直した（曲の位置が変わる）
   return state.film;
+}
+
+// BPM の表示（曲に合わせると小数になる）
+const fmtBpm = (b) => (Number.isInteger(b) ? String(b) : b.toFixed(1));
+
+// 曲を映像の今の時刻に合わせて鳴らす（曲がない・録画中は鳴らさない）
+function syncMusic() {
+  if (state.playing && state.film && !recorder) musicPlay(state.film.music, state.t);
+  else musicPause();
 }
 
 function play(fromStart = true) {
@@ -468,11 +485,13 @@ function play(fromStart = true) {
   }
   $('#play').textContent = '❚❚';
   heroSync();
+  syncMusic();
   poke();
 }
 
 function pause() {
   state.playing = false;
+  musicPause();
   $('#play').textContent = '▶';
   state.dirty = true;
 }
@@ -500,7 +519,7 @@ function reroll() {
   $('#seed').value = state.seed;
   build();
   play(true);
-  toast(`${state.film.theme} ・ ${state.film.bpm} BPM ・ ${state.seed}`);
+  toast(`${state.film.theme} ・ ${fmtBpm(state.film.bpm)} BPM ・ ${state.seed}`);
 }
 
 // ---------------------------------------------------------------- 表示サイズ
@@ -550,11 +569,15 @@ function frame(now) {
   if (f) {
     if (state.playing) {
       state.t += dt;
+      // 曲が鳴っていれば映像の時刻を曲に従わせる（currentTime は粗く進むことがあるので、ずれが 40ms を超えたときだけ）
+      const mt = musicTime(f.music);
+      if (mt !== null && Math.abs(mt - state.t) > 0.04) state.t = Math.max(0, mt);
       if (state.t >= f.duration) {
         if (recorder) { finishRecording(); }
-        else if (state.loop) { state.t %= f.duration; }
+        else if (state.loop) { state.t %= f.duration; syncMusic(); }
         else { state.t = f.duration; pause(); }
       }
+      if (state.playing) musicLevel(f.music, state.t);
     }
     if ((state.playing || state.dirty) && !state.exporting) {
       const t0 = performance.now();
@@ -737,6 +760,7 @@ function wake() {
 function seekTo(clientX) {
   const r = $('#seek').getBoundingClientRect();
   state.t = Math.max(0, Math.min(1, (clientX - r.left) / r.width)) * state.film.duration;
+  if (state.playing) syncMusic();
   poke();
 }
 
@@ -747,6 +771,7 @@ function jump(dir) {
   let i = starts.findIndex((s, k) => state.t >= s && (k === starts.length - 1 || state.t < starts[k + 1]));
   i = Math.max(0, Math.min(starts.length - 1, i + dir));
   state.t = starts[i];
+  if (state.playing) syncMusic();
   poke();
 }
 
@@ -768,7 +793,7 @@ bindSeg('#order', 'order');
 bindSeg('#opener', 'opener');
 bindSeg('#closer', 'closer');
 initFocalEditor();
-initSong({ onChange: () => { state.film = null; scheduleSave(); }, toast });
+initSong({ onChange: () => { state.film = null; scheduleSave(); renderWorks(); }, toast });
 $('#adv').addEventListener('toggle', () => { if ($('#adv').open !== state.advOpen) setAdvOpen($('#adv').open); });
 $('#adv-reset').addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); resetAdv(); }); // summary 内なので開閉させない
 $('#pace').addEventListener('click', renderWorks);
@@ -1038,6 +1063,6 @@ window.__hg = {
   // GPU に溜まった描画命令を最後まで実行させる（1px 読み出しで同期。gl.finish は Chrome では待たない）
   sync: () => { const gl = renderer.gl; const px = new Uint8Array(4); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); return px[3]; },
   setSeed: (s) => { state.seed = s; $('#seed').value = s; state.film = null; },
-  song, setSongFile, clearSong,
+  song, setSongFile, clearSong, musicTime,
   setOpt: (k, v) => { state[k] = v; state.film = null; segSyncs.forEach((f) => f()); updateAdvSummary(); },
 };
