@@ -958,16 +958,19 @@ async function sheet(page, file, rows) {
       window.__drawn = [];
       f.render = (r, t) => { window.__drawn.push({ t, mt: h.musicTime(f.music) }); return render(r, t); };
     });
-    const lastDrawn = () => page.evaluate(() => window.__drawn.filter((d) => d.mt !== null).slice(-3));
-    await page.waitForTimeout(1500);
+    // 描けたコマが揃うまで待つ（決まった時間だと、描画の遅い環境ではコマが足りない）
+    const drawnSince = (from, minT) => page.waitForFunction(({ from, minT }) => window.__drawn.slice(from).filter((d) => d.mt !== null && d.t >= minT).length >= 3, { from, minT }, { timeout: 60000 }).catch(() => {});
+    const lastDrawn = (from = 0) => page.evaluate((from) => window.__drawn.slice(from).filter((d) => d.mt !== null).slice(-3), from);
+    await drawnSince(0, 1);
     const a = await lastDrawn();
-    check('song sync: video clock follows the song while playing', a.length >= 2 && a[a.length - 1].t > 1 && a.every((d) => Math.abs(d.mt - d.t) < 0.05), JSON.stringify(a));
+    check('song sync: video clock follows the song while playing', a.length === 3 && a[2].t > 1 && a.every((d) => Math.abs(d.mt - d.t) < 0.05), JSON.stringify(a));
+    const mark = await page.evaluate(() => window.__drawn.length);
     await page.keyboard.press('ArrowRight');
     await page.keyboard.press('ArrowRight');
-    await page.waitForTimeout(800);
     const start = await page.evaluate(() => window.__hg.state.film.segments[2].start);
-    const b = await lastDrawn();
-    check('song sync: jumping to the next work moves the song too', b.length >= 2 && b[0].t >= start && b.every((d) => Math.abs(d.mt - d.t) < 0.05), JSON.stringify({ start, b }));
+    await drawnSince(mark, start);
+    const b = await lastDrawn(mark);
+    check('song sync: jumping to the next work moves the song too', b.length === 3 && b[0].t >= start && b.every((d) => Math.abs(d.mt - d.t) < 0.05), JSON.stringify({ start, b }));
     await page.evaluate(() => window.__hg.pause());
     check('song sync: pausing the film pauses the song', await page.evaluate(() => window.__hg.musicTime(window.__hg.state.film.music) === null));
   } else {
