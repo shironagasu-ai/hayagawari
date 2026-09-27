@@ -660,11 +660,12 @@ function download(blob, ext) {
 
 // ---------------------------------------------------------------- 書き出し（1コマずつ・WebCodecs）
 
-const xp = { res: 1, fps: 60, enc: null, aenc: null, abort: null, running: false, limit: 0 }; // limit: テスト用に書き出す秒数を制限
+const xp = { res: 1080, fps: 60, enc: null, aenc: null, abort: null, running: false, limit: 0 }; // res: 書き出す短辺のピクセル数（仮想解像度の短辺は 1080）/ limit: テスト用に書き出す秒数を制限
 
 function exportSize() {
   const [W, H] = ASPECTS[state.aspect];
-  return [W * xp.res, H * xp.res];
+  const s = xp.res / 1080;
+  return [Math.round(W * s), Math.round(H * s)];
 }
 
 async function refreshExportInfo() {
@@ -714,7 +715,7 @@ async function startExport() {
   $('#xp-close').textContent = '中止';
   $('#xp-progress').hidden = false;
   body.classList.add('exporting');
-  resize(xp.res);
+  resize(xp.res / 1080);
   const f = state.film;
   const dur = xp.limit > 0 ? Math.min(xp.limit, f.duration) : f.duration;
   try {

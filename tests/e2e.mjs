@@ -409,6 +409,14 @@ async function sheet(page, file, rows) {
   const info = await page.textContent('#xp-info');
   console.log('export info:', info.replace(/\s+/g, ' ').slice(0, 160));
   check('frame export available', info.includes('1コマずつ'), info);
+  // 解像度: 540p・720p・1080p・4K（16:9 ではそれぞれ 960×540 / 1280×720 / 1920×1080 / 3840×2160）
+  const sizes = [];
+  for (const v of ['540', '720', '2160', '1080']) {
+    await page.click(`#xp-res button[data-v="${v}"]`);
+    await page.waitForFunction(() => !document.querySelector('#xp-info').textContent.includes('判定中'));
+    sizes.push(((await page.textContent('#xp-info')).match(/(\d+)×(\d+)/) || [])[0]);
+  }
+  check('export sizes 540p / 720p / 4K / 1080p', JSON.stringify(sizes) === JSON.stringify(['960×540', '1280×720', '3840×2160', '1920×1080']), JSON.stringify(sizes));
   const noSoundUi = await page.evaluate(() => !document.querySelector('#snd') && !document.querySelector('#xp-snd'));
   check('no sound controls (v1.0.0 has no sound)', !info.includes('音声') && noSoundUi, info);
   const vcodec = (info.match(/1コマずつ（(\S+) \/ MP4）/) || [])[1];
@@ -861,6 +869,7 @@ async function sheet(page, file, rows) {
   // 書き出し: 曲が入る（AAC、なければ Opus）。画面に音声の方式と権利の注意書き
   await page.click('#export');
   await page.click('#xp-fps button[data-v="30"]');
+  await page.click('#xp-res button[data-v="720"]'); // 小さい解像度でも書き出せることをここで確かめる
   await page.waitForFunction(() => !document.querySelector('#xp-info').textContent.includes('判定中'));
   const xinfo = await page.textContent('#xp-info');
   const acodec = (xinfo.match(/音声: (\S+)（/) || [])[1];
@@ -876,6 +885,14 @@ async function sheet(page, file, rows) {
     await dl.saveAs(file);
     const bytes = readFileSync(file).toString('latin1');
     check('song export: mp4 has an audio track', bytes.includes('soun') && (bytes.includes('mp4a') || bytes.includes('Opus')));
+    const dim = await page.evaluate(async () => {
+      const v = document.createElement('video');
+      v.muted = true;
+      v.src = URL.createObjectURL(window.__hg.state.lastExport.blob);
+      await new Promise((r, j) => { v.onloadedmetadata = r; v.onerror = () => j(new Error('video error')); });
+      return `${v.videoWidth}x${v.videoHeight}`;
+    });
+    check('song export: 720p export is 1280x720', dim === '1280x720', dim);
     // 音声を読み戻して、長さと音が入っていることを確かめる（読めないブラウザでは省く）
     const au = await page.evaluate(async () => {
       try {
