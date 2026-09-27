@@ -95,6 +95,7 @@ v1.0.0 では合成の音をなくした。v1.1 で、ユーザーが持ち込�
 - 実時間の録画（WebCodecs が使えないブラウザ）では曲を入れない（対象のブラウザが少ないため見送り。画面で知らせる）
 - 曲の欄に BETA の表示。曲の欄と書き出しの画面に権利の注意書き
 - iPhone（Safari）で「書き出した動画に音が入らない」報告あり（原因は実機で未確定）。手当て: AAC は `format: 'aac'` を指定し、ADTS の見出しが付いていれば取り除く／エンコーダーが空の設定情報（description）を返したら muxer の推測値（AAC-LC）を使う／output の中の例外を拾って失敗にし、音声が 0 件なら失敗にする／書き出し後に `audioPlayable` で音声を読み戻し、再生できなければ知らせる
+  - 続報: iPhone 17 Pro の Safari で「音声: AAC」なのに書き出し後の確認で再生できず、音声なし。Apple の AAC エンコーダーは設定情報を AudioSpecificConfig ではなく ES_Descriptor（esds の中身）で返すと推測し、`aacSpecificConfig` で中の AudioSpecificConfig を取り出すようにした（未確認）。再生できないときは書き出しの画面に診断（設定情報の先頭・取り出した値・件数・バイト数・先頭のバイト）を出す
 - AAC は OS のエンコーダーを使うので、Linux の Chrome（CI の Chrome も）では使えず Opus になる。AAC の経路は CI では通らない
 - 未確認のこと: 長い曲をスマホで書き出すときのメモリ（曲全体を 48kHz・float で読むので 4 分で約 90MB）。Mac・Windows の Chrome / Edge と Safari で AAC になるか（実機で確かめる）
 

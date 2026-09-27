@@ -734,10 +734,19 @@ async function startExport() {
     });
     download(blob, 'mp4');
     toast(`書き出し完了（${(blob.size / 1e6).toFixed(1)} MB・${xp.enc.label}${audio ? ' + ' + xp.aenc.label : ''} / MP4）`);
-    // 曲を入れたときは、書き出した音声をこのブラウザで読み戻せるか確かめる（入っていなければ知らせる）
+    // 曲を入れたときは、書き出した音声をこのブラウザで読み戻せるか確かめる。
+    // 読めなければダイアログを閉じずに知らせ、原因を調べるための情報（音声の設定情報・件数）を出す
     if (audio) {
       state.lastExport.audioOk = await audioPlayable(blob);
-      if (!state.lastExport.audioOk) toast(`書き出した動画の音声（${xp.aenc.label}）をこのブラウザで再生できませんでした。この端末では音が出ない可能性があります`);
+      state.lastExport.audioInfo = audio.info;
+      if (!state.lastExport.audioOk) {
+        const i = audio.info;
+        $('#xp-status').innerHTML = `<span class="warn">書き出した動画の音声（${xp.aenc.label}）をこのブラウザで再生できませんでした。この端末では音が出ない可能性があります。</span>`
+          + `<br>診断: ${escapeHtml(i.codec)} ・ ${i.chunks} 件 / ${i.bytes} バイト ・ 設定 ${i.desc} → ${i.asc} ・ 先頭 ${i.first}`;
+        $('#xp-close').textContent = '閉じる';
+        $('#xp-start').disabled = false;
+        return;
+      }
     }
     $('#xp').hidden = true;
   } catch (e) {
