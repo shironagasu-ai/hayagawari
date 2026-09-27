@@ -394,6 +394,132 @@ async function sheet(page, file, rows) {
   await page.close();
 }
 
+// ---- 3b. 出さない演出: 外した演出は抽選に出ない／1 つは残す／URL・保存・カタログのボタン
+{
+  const { page, errors } = await openPage({ width: 1280, height: 800 }, '#adv=1&seed=EX-0001');
+  await page.evaluate(() => window.__hg.loadSamples());
+  await page.waitForFunction(() => window.__hg.state.works.length === 6, null, { timeout: 30000 });
+  // 除外なしなら、除外の指定がない（空の）ときと同じ映像
+  const same = await page.evaluate(() => {
+    const out = [];
+    for (let i = 0; i < 20; i++) {
+      window.__hg.setSeed('EXS' + i); window.__hg.build();
+      const a = JSON.stringify(window.__hg.state.film.summary) + window.__hg.state.film.theme;
+      window.__hg.setOpt('exclude', { variant: [] }); window.__hg.build();
+      out.push(a === JSON.stringify(window.__hg.state.film.summary) + window.__hg.state.film.theme);
+      window.__hg.setOpt('exclude', {});
+    }
+    return out.every(Boolean);
+  });
+  check('exclude: empty exclusion keeps the same film', same);
+  // 多めに外して 60 通りのシードで作り、外したものが 1 回も出ない
+  const EX = {
+    style: ['NOIR', 'POP', 'GLITCH'], opener: ['montage', 'type', 'boot'], closer: ['grid', 'stack'],
+    variant: ['focus', 'cuts', 'pixel', 'card', 'cinema'], transition: ['whip', 'cut', 'bars', 'zoom'],
+    decor: ['number', 'grid', 'blur', 'dots'], palette: ['dark', 'light', 'accent'],
+  };
+  const hits = await page.evaluate((EX) => {
+    window.__hg.setOpt('exclude', EX);
+    const bad = [];
+    let decors = 0;
+    for (const style of ['auto', 'MIX']) {
+      window.__hg.setOpt('style', style);
+      for (let i = 0; i < 30; i++) {
+        window.__hg.setSeed('EXC' + i); window.__hg.build();
+        const f = window.__hg.state.film;
+        if (EX.opener.includes(f.opener)) bad.push('opener:' + f.opener);
+        if (EX.closer.includes(f.closer)) bad.push('closer:' + f.closer);
+        if (style === 'auto' && EX.style.includes(f.theme)) bad.push('style:' + f.theme);
+        for (const t of f.workThemes) if (EX.style.includes(t)) bad.push('work style:' + t);
+        for (const s of f.summary) {
+          if (s.out && s.kind !== 'closer' && EX.transition.includes(s.out)) bad.push('transition:' + s.out); // エンディングの後（ループの頭）は常にカット
+          if (s.kind !== 'work') continue;
+          if (EX.variant.includes(s.variant)) bad.push('variant:' + s.variant);
+          if (EX.palette.includes(s.palette)) bad.push('palette:' + s.palette);
+          for (const d of s.decor) { decors++; if (EX.decor.includes(d)) bad.push('decor:' + d); }
+        }
+      }
+    }
+    return { bad, decors };
+  }, EX);
+  check('exclude: excluded effects never picked', hits.bad.length === 0 && hits.decors > 0, hits.bad.slice(0, 8).join(', '));
+  // 明示的に選んだものは除外より優先
+  const explicit = await page.evaluate(() => {
+    window.__hg.setOpt('style', 'NOIR'); window.__hg.setOpt('opener', 'montage'); window.__hg.build();
+    const f = window.__hg.state.film;
+    window.__hg.setOpt('style', 'auto'); window.__hg.setOpt('opener', 'auto');
+    return [f.theme, f.opener];
+  });
+  check('exclude: explicit choice wins over exclusion', explicit.join() === 'NOIR,montage', explicit.join());
+  // 背景の飾りは全部外せる（飾りなし）。見せ方・切り替えを 1 つだけ残すとそれだけになる
+  const only = await page.evaluate(() => {
+    const { catalogKeys } = window.__hg.fx;
+    window.__hg.setOpt('exclude', {
+      decor: catalogKeys('decor'),
+      variant: catalogKeys('variant').filter((k) => k !== 'slam'),
+      transition: catalogKeys('transition').filter((k) => k !== 'glitch'),
+    });
+    const v = new Set(), tr = new Set(), d = new Set();
+    for (let i = 0; i < 10; i++) {
+      window.__hg.setSeed('ONLY' + i); window.__hg.build();
+      const f = window.__hg.state.film;
+      for (const s of f.summary) { if (s.kind === 'work') { v.add(s.variant); s.decor.forEach((x) => d.add(x)); } if (s.out && s.kind !== 'closer') tr.add(s.out); }
+      for (let k = 0; k < 20; k++) window.__hg.renderAt((k / 20) * f.duration);
+    }
+    return { v: [...v], tr: [...tr], d: [...d] };
+  });
+  // 最後の境界だけはグリッチを使わない（残りがグリッチだけならカラーバー）
+  check('exclude: whitelist of one variant / transition, no decor', only.v.join() === 'slam' && only.tr.every((t) => t === 'glitch' || t === 'bars') && only.d.length === 0, JSON.stringify(only));
+  // UI: 1 つは残す（最後の 1 つは外せない）
+  await page.evaluate(() => { window.__hg.setOpt('exclude', { opener: window.__hg.fx.catalogKeys('opener').slice(1) }); document.querySelector('.ex-cat[data-cat="opener"]').open = true; });
+  const firstOp = await page.evaluate(() => window.__hg.fx.catalogKeys('opener')[0]);
+  await page.click(`.ex-cat[data-cat="opener"] .ex-chips button[data-key="${firstOp}"]`);
+  check('exclude: last one cannot be excluded', await page.evaluate((k) => !window.__hg.state.exclude.opener.includes(k), firstOp) && (await page.textContent('#toast')).includes('1 つ残して'));
+  // UI: ボタンで外す → 要約・URL に載る → 反転で「それだけ出す」
+  await page.evaluate(() => window.__hg.setOpt('exclude', {}));
+  await page.evaluate(() => { document.querySelector('.ex-cat[data-cat="variant"]').open = true; });
+  await page.click('.ex-cat[data-cat="variant"] .ex-chips button[data-key="pixel"]');
+  await page.click('.ex-cat[data-cat="variant"] .ex-chips button[data-key="scan"]');
+  const ui = await page.evaluate(() => ({
+    ex: window.__hg.state.exclude, sum: document.querySelector('#adv-sum').textContent,
+    count: document.querySelector('.ex-cat[data-cat="variant"] .ex-count').textContent,
+    off: [...document.querySelectorAll('.ex-cat[data-cat="variant"] button.off')].map((b) => b.dataset.key),
+  }));
+  check('exclude: chips toggle and summary counts', JSON.stringify(ui.ex) === '{"variant":["scan","pixel"]}' && ui.sum.includes('出さない演出 2 件') && ui.count.includes('2 件') && ui.off.join() === 'scan,pixel', JSON.stringify(ui));
+  await page.screenshot({ path: join(outDir, 'exclude-settings.png'), fullPage: true });
+  await page.click('#go');
+  check('exclude: URL carries exclusions', await page.evaluate(() => decodeURIComponent(location.hash).includes('x-variant=scan.pixel')));
+  const url = await page.evaluate(() => location.hash);
+  await page.evaluate(() => window.__hg.toEditor());
+  await page.click('.ex-cat[data-cat="variant"] .ex-inv');
+  check('exclude: invert keeps only the chosen ones', await page.evaluate(() => { const v = window.__hg.state.exclude.variant; return v.length === window.__hg.fx.catalogKeys('variant').length - 2 && !v.includes('scan') && !v.includes('pixel'); }));
+  // 閉じている間は除外も使わない（すべておまかせ）
+  const closed = await page.evaluate(() => {
+    window.__hg.setAdvOpen(false);
+    window.__hg.setOpt('exclude', { variant: window.__hg.fx.catalogKeys('variant').filter((k) => k !== 'slam') });
+    const v = new Set();
+    for (let i = 0; i < 5; i++) { window.__hg.setSeed('CL' + i); window.__hg.build(); window.__hg.state.film.summary.forEach((s) => s.variant && s.kind === 'work' && v.add(s.variant)); }
+    return v.size;
+  });
+  check('exclude: not applied while settings are closed', closed > 1, `variants=${closed}`);
+  // 共有 URL で開くと除外も再現される
+  const p2 = await openPage({ width: 1280, height: 800 }, url);
+  check('exclude: restored from shared URL', await p2.page.evaluate(() => JSON.stringify(window.__hg.state.exclude)) === '{"variant":["scan","pixel"]}');
+  await p2.page.close();
+  // カタログのカードの「出さない」: 押すと外れる（詳細設定が閉じていれば開く）、もう一度で戻る
+  await page.evaluate(() => { window.__hg.setOpt('exclude', {}); location.hash = 'catalog=decor'; });
+  await page.waitForSelector('.cat-card[data-key="ticker"] .cat-ex:not([hidden])');
+  await page.click('.cat-card[data-key="ticker"] .cat-ex');
+  const cat1 = await page.evaluate(() => ({ ex: window.__hg.state.exclude, adv: window.__hg.state.advOpen, off: document.querySelector('.cat-card[data-key="ticker"]').classList.contains('off'), chip: document.querySelector('.ex-cat[data-cat="decor"] button[data-key="ticker"]').classList.contains('off') }));
+  check('exclude: catalog button excludes and turns settings on', JSON.stringify(cat1.ex) === '{"decor":["ticker"]}' && cat1.adv && cat1.off && cat1.chip, JSON.stringify(cat1));
+  await page.screenshot({ path: join(outDir, 'exclude-catalog.png') });
+  await page.click('.cat-card[data-key="ticker"] .cat-ex');
+  check('exclude: catalog button toggles back', await page.evaluate(() => JSON.stringify(window.__hg.state.exclude) === '{}' && !document.querySelector('.cat-card[data-key="ticker"]').classList.contains('off')));
+  check('exclude: MIX has no exclude button', await page.evaluate(() => { location.hash = 'catalog=style'; return new Promise((r) => setTimeout(() => r(document.querySelector('.cat-card[data-key="MIX"] .cat-ex').hidden), 100)); }));
+  check('no page errors (exclude)', errors.length === 0, errors.join('\n'));
+  await page.close();
+}
+
 // ---- 4. 書き出し（1コマずつ・WebCodecs）: 実際に MP4 を作り、<video> で再生できるか確認
 {
   // adv=1: 詳細設定を開いた状態＝指定のシードを使う（閉じているとシードが毎回ランダムになり結果がぶれる）
@@ -511,6 +637,7 @@ async function sheet(page, file, rows) {
   await page.evaluate(() => window.__hg.setAdvOpen(true));
   await page.fill('#works .work:nth-child(2) input.title', 'Renamed Work');
   await page.click('#pace button[data-v="tight"]');
+  await page.evaluate(() => window.__hg.setOpt('exclude', { opener: ['boot'], decor: ['dots', 'grid'] }));
   const before = await page.evaluate(() => {
     const s = window.__hg.state;
     const w = s.works[0];
@@ -526,13 +653,14 @@ async function sheet(page, file, rows) {
     const s = window.__hg.state;
     return {
       artist: document.querySelector('#artist').value, subline: document.querySelector('#subline').value,
-      seed: s.seed, pace: s.pace, names: s.works.map((x) => x.name), title: s.works[1].title,
+      seed: s.seed, pace: s.pace, exclude: s.exclude, names: s.works.map((x) => x.name), title: s.works[1].title,
       focal: s.works[0].focal, autoTitle: s.works[1].autoTitle,
     };
   });
   check('restore: images come back in order', JSON.stringify(after.names) === JSON.stringify(before.names), after.names.join(','));
   check('restore: text fields', after.artist === 'SAVE TEST' && after.subline === 'SUB', `${after.artist}/${after.subline}`);
   check('restore: seed and advanced settings', after.seed === before.seed && after.pace === 'tight', `${after.seed} ${after.pace}`);
+  check('restore: excluded effects', JSON.stringify(after.exclude) === '{"opener":["boot"],"decor":["grid","dots"]}', JSON.stringify(after.exclude));
   check('restore: edited title and manual focal', after.title === 'Renamed Work' && after.autoTitle !== 'Renamed Work' && after.focal.length === 1 && after.focal[0].manual && Math.abs(after.focal[0].x - 0.2) < 1e-6, JSON.stringify([after.title, after.focal]));
   // 1 枚外すと、その画像も保存から消える
   await page.click('#works .work:nth-child(1) .x');
@@ -957,8 +1085,12 @@ async function sheet(page, file, rows) {
 {
   const { page, errors } = await openPage({ width: 1280, height: 800 });
   await page.evaluate(() => window.__hg.setAdvOpen(true));
-  const links = await page.evaluate(() => [...document.querySelectorAll('#adv a.cat-link')].map((a) => a.getAttribute('href')));
+  const links = await page.evaluate(() => [...document.querySelectorAll('#adv label a.cat-link')].map((a) => a.getAttribute('href')));
   check('advanced settings link to the catalog', JSON.stringify(links) === JSON.stringify(['#catalog=style', '#catalog=opener', '#catalog=closer']), links.join(','));
+  // 出さない演出の各カテゴリからも、そのカテゴリのカタログへ
+  const exLinks = await page.evaluate(() => [...document.querySelectorAll('#exclude a.cat-link')].map((a) => a.getAttribute('href').replace('#catalog=', '')));
+  const cats = await page.evaluate(() => window.__hg.fx.CATEGORIES.map((c) => c.key));
+  check('exclude sections link to the catalog', JSON.stringify(exLinks) === JSON.stringify(cats), exLinks.join(','));
   await page.click('#adv a[href="#catalog=closer"]');
   await page.waitForFunction(() => !document.querySelector('#catalog').hidden, null, { timeout: 10000 });
   check('catalog link opens that category', await page.evaluate(() => window.__hg.catalog.current === 'closer'));

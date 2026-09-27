@@ -13,6 +13,7 @@ import { VERSION, BUILD, PREVIEW, storageKey } from './version.js';
 import { initCatalog, catalogFilm, catalogKeys } from './catalog.js';
 import { CATEGORIES, labelOf } from './fx/labels.js';
 import { AVOID_DECOR } from './fx/rules.js';
+import { initExcludeUI, normalizeExclude, toggleExclude, isExcluded, excludeCount, excludeFromParams, excludeToParams, excludeKeys, minKeep } from './exclude.js';
 import { PACE } from './fx/themes.js';
 
 const $ = (s) => document.querySelector(s);
@@ -39,6 +40,7 @@ const state = {
   order: 'keep',
   opener: 'auto',
   closer: 'auto',
+  exclude: {}, // 出さない演出（カテゴリ → キーの配列）
   advOpen: false, // 詳細設定アコーディオンの開閉（映像全体の設定だけ。作品ごとのタイトル・注目点は開閉に関係なく常に反映）
   film: null,
   t: 0,
@@ -62,12 +64,13 @@ function readHash() {
   if (['keep', 'shuffle'].includes(h.get('order'))) state.order = h.get('order');
   if (h.get('opener')) state.opener = h.get('opener');
   if (h.get('closer')) state.closer = h.get('closer');
+  state.exclude = excludeFromParams(h);
   return h.get('adv') === '1'; // 詳細設定を開いた状態で作った映像の URL
 }
 function writeHash() {
   // 閉じている（おまかせ）ときは詳細設定を URL に載せない。開いているときは再現用に全部載せる
   const h = new URLSearchParams(state.advOpen
-    ? { adv: '1', seed: state.seed, aspect: state.aspect, pace: state.pace, style: state.style, order: state.order, opener: state.opener, closer: state.closer }
+    ? { adv: '1', seed: state.seed, aspect: state.aspect, pace: state.pace, style: state.style, order: state.order, opener: state.opener, closer: state.closer, ...excludeToParams(state.exclude) }
     : { seed: state.seed, aspect: state.aspect });
   history.replaceState(null, '', '#' + h.toString());
 }
@@ -97,13 +100,16 @@ const ADV_NAMES = { pace: 'テンポ', style: 'スタイル', opener: 'オープ
 
 // 詳細設定は開いている間だけ反映。閉じている間はすべておまかせ（再生のたびに新しいシード）
 function changedAdv() {
-  return Object.keys(ADV_DEFAULTS).filter((k) => state[k] !== ADV_DEFAULTS[k]);
+  const changed = Object.keys(ADV_DEFAULTS).filter((k) => state[k] !== ADV_DEFAULTS[k]);
+  if (excludeCount(state.exclude)) changed.push('exclude');
+  return changed;
 }
 
 function updateAdvSummary() {
   const changed = changedAdv();
   const el = $('#adv-sum');
   const list = changed.map((k) => {
+    if (k === 'exclude') return `出さない演出 ${excludeCount(state.exclude)} 件`;
     const btn = document.querySelector(`#${k} button[data-v="${state[k]}"]`);
     return `${ADV_NAMES[k]} ${btn ? btn.textContent : state[k]}`;
   }).join('・');
@@ -125,11 +131,51 @@ function setAdvOpen(open) {
 }
 
 function resetAdv() {
+  const n = excludeCount(state.exclude);
+  if (n && !confirm(`出さない演出（${n} 件）も元に戻して、すべて出るようにしますか？`)) return;
   Object.assign(state, ADV_DEFAULTS);
   segSyncs.forEach((f) => f());
+  setExclude({});
   state.film = null;
   updateAdvSummary();
   renderWorks();
+}
+
+// ---------------------------------------------------------------- 出さない演出（除外）
+
+let exUI = null;
+let catalog = null; // 演出カタログ（下で作る）
+function setExclude(ex) {
+  state.exclude = normalizeExclude(ex);
+  state.film = null;
+  if (exUI) exUI.sync();
+  if (catalog) catalog.syncExclude();
+  updateAdvSummary();
+  scheduleSave();
+}
+// 1 つ切り替える。fromCatalog: カタログのカードから（詳細設定が閉じていたら開く＝反映する）
+function flipExclude(cat, key, fromCatalog = false) {
+  const next = toggleExclude(state.exclude, cat, key);
+  if (!next) {
+    toast(`${CATEGORIES.find((c) => c.key === cat).name}は少なくとも 1 つ残してください`);
+    return;
+  }
+  setExclude(next);
+  if (fromCatalog) {
+    const [name] = labelOf(cat, key);
+    const off = isExcluded(state.exclude, cat, key);
+    if (off && !state.advOpen) {
+      setAdvOpen(true);
+      toast(`「${name}」を出さないようにしました（詳細設定をオンにしました）`);
+    } else toast(off ? `「${name}」を出さないようにしました` : `「${name}」をまた出すようにしました`);
+  }
+}
+function setExcludeCat(cat, keys) {
+  if (excludeKeys(cat).length - keys.length < minKeep(cat)) {
+    toast(`${CATEGORIES.find((c) => c.key === cat).name}は少なくとも 1 つ残してください`);
+    return;
+  }
+  setExclude({ ...state.exclude, [cat]: keys });
 }
 
 function renderWorks() {
@@ -352,7 +398,7 @@ function addFiles(files) {
 
 // ---------------------------------------------------------------- 作業の保存（IndexedDB・このブラウザ内のみ）
 
-const SAVED_KEYS = ['seed', 'aspect', 'pace', 'style', 'order', 'opener', 'closer'];
+const SAVED_KEYS = ['seed', 'aspect', 'pace', 'style', 'order', 'opener', 'closer', 'exclude'];
 const TEXT_FIELDS = ['artist', 'subline', 'handle'];
 const persist = { ready: false, timer: 0, pending: new Set() };
 
@@ -395,10 +441,18 @@ async function restoreSession() {
     for (const k of SAVED_KEYS) {
       if (!st[k] || h.get(k)) continue;
       if (k === 'aspect' && !ASPECTS[st[k]]) continue;
+      if (k === 'exclude') {
+        // 詳細設定つきの URL（adv=1）や除外つきの URL なら、そちらを優先
+        if (h.get('adv') === '1' || excludeCount(excludeFromParams(h))) continue;
+        state.exclude = normalizeExclude(st.exclude);
+        continue;
+      }
       state[k] = st[k];
     }
     $('#seed').value = state.seed;
     segSyncs.forEach((f) => f());
+    if (exUI) exUI.sync();
+    if (catalog) catalog.syncExclude();
     updateAdvSummary();
     // 曲（復元待ちの間に別の曲を選んでいたら、そちらを優先）
     if (s.song && !song.cur) await setSongFile(s.song.blob, s.song.name, s.song);
@@ -427,7 +481,7 @@ function clearWorks() {
 
 // 生成に使う設定。閉じている間は詳細設定を使わず、既定（おまかせ）で作る（作品ごとのタイトル・注目点は常に使う）
 function effectiveSettings() {
-  return state.advOpen ? { ...state } : { ...state, ...ADV_DEFAULTS };
+  return state.advOpen ? { ...state } : { ...state, ...ADV_DEFAULTS, exclude: {} };
 }
 
 function build() {
@@ -445,6 +499,7 @@ function build() {
     theme: S.style === 'auto' ? null : S.style,
     opener: S.opener === 'auto' ? null : S.opener,
     closer: S.closer === 'auto' ? null : S.closer,
+    exclude: S.exclude,
     variant: state.variant || null,
     music: song.cur ? { grid: song.cur.grid, duration: song.cur.duration } : null,
     artist: $('#artist').value.trim(), subline: $('#subline').value.trim(), handle: $('#handle').value.trim(),
@@ -812,6 +867,7 @@ bindSeg('#style', 'style');
 bindSeg('#order', 'order');
 bindSeg('#opener', 'opener');
 bindSeg('#closer', 'closer');
+exUI = initExcludeUI({ el: $('#exclude'), get: () => state.exclude, toggle: (cat, key) => flipExclude(cat, key), set: setExcludeCat });
 initFocalEditor();
 initSong({ onChange: () => { state.film = null; scheduleSave(); renderWorks(); }, toast });
 $('#adv').addEventListener('toggle', () => { if ($('#adv').open !== state.advOpen) setAdvOpen($('#adv').open); });
@@ -1050,8 +1106,12 @@ function loadCatalogWorks() {
   }
   return catalogWorks;
 }
-const catalog = initCatalog({
+catalog = initCatalog({
   renderer,
+  exclude: {
+    has: (cat, key) => isExcluded(state.exclude, cat, key),
+    toggle: (cat, key) => flipExclude(cat, key, true),
+  },
   loadWorks: loadCatalogWorks,
   restore: () => resize(),
   play: async (cat, key) => {
@@ -1084,5 +1144,5 @@ window.__hg = {
   sync: () => { const gl = renderer.gl; const px = new Uint8Array(4); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); return px[3]; },
   setSeed: (s) => { state.seed = s; $('#seed').value = s; state.film = null; },
   song, setSongFile, clearSong, musicTime,
-  setOpt: (k, v) => { state[k] = v; state.film = null; segSyncs.forEach((f) => f()); updateAdvSummary(); },
+  setOpt: (k, v) => { if (k === 'exclude') return setExclude(v); state[k] = v; state.film = null; segSyncs.forEach((f) => f()); updateAdvSummary(); },
 };

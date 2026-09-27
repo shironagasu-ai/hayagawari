@@ -64,8 +64,9 @@ export function catalogFilm(cat, key, works, tf) {
  * @param {() => Promise<object[]>} o.loadWorks 見本に使う作品（解析済み・テクスチャ付き）
  * @param {(cat: string, key: string) => void} o.play その演出の映像を全画面のプレーヤーで再生する（main が本編の文字工場で作り直す）
  * @param {() => void} o.restore カタログを閉じたときに、画面の描画サイズを本編用に戻す
+ * @param {{ has: (cat: string, key: string) => boolean, toggle: (cat: string, key: string) => void }} [o.exclude] 出さない演出の確認と切り替え
  */
-export function initCatalog({ renderer, loadWorks, play, restore }) {
+export function initCatalog({ renderer, loadWorks, play, restore, exclude }) {
   const root = document.querySelector('#catalog');
   const tabs = root.querySelector('#cat-tabs');
   const grid = root.querySelector('#cat-grid');
@@ -210,16 +211,35 @@ export function initCatalog({ renderer, loadWorks, play, restore }) {
         <div class="cat-meta">
           <div class="cat-name"><b></b><code></code></div>
           <p class="cat-desc"></p>
-          <div class="cat-row"><button class="btn cat-play">▶ 全画面で再生</button><span class="cat-dur hint"></span></div>
+          <div class="cat-row"><button class="btn cat-play">▶ 全画面で再生</button><span class="cat-dur hint"></span><button class="btn cat-ex" hidden></button></div>
         </div>`;
       card.querySelector('b').textContent = name;
       card.querySelector('code').textContent = key;
       card.querySelector('.cat-desc').textContent = desc;
       card.querySelector('.cat-play').addEventListener('click', () => play(cat, key));
+      // 抽選に出さない（スタイルのミックスは抽選されないので出さない）
+      if (exclude && key !== 'MIX') {
+        const ex = card.querySelector('.cat-ex');
+        ex.hidden = false;
+        ex.addEventListener('click', () => exclude.toggle(cat, key));
+      }
       card.addEventListener('mouseenter', () => { hover = card; lastPick = 0; });
       card.addEventListener('mouseleave', () => { if (hover === card) { hover = null; lastPick = 0; } });
       grid.appendChild(card);
       io.observe(card);
+    }
+    syncExclude();
+  }
+
+  function syncExclude() {
+    if (!exclude) return;
+    for (const card of grid.querySelectorAll('.cat-card')) {
+      const off = exclude.has(card.dataset.cat, card.dataset.key);
+      card.classList.toggle('off', off);
+      const b = card.querySelector('.cat-ex');
+      b.textContent = off ? '出さない ✓' : '出さない';
+      b.title = off ? '押すとまた抽選に出る' : 'おまかせの抽選に出さない（詳細設定の「出さない演出」と同じ）';
+      b.setAttribute('aria-pressed', off ? 'true' : 'false');
     }
   }
 
@@ -245,6 +265,7 @@ export function initCatalog({ renderer, loadWorks, play, restore }) {
       if (!open && was) { setLive(null, 0); restore(); }
       return open;
     },
+    syncExclude,
     get current() { return current; },
     get liveKey() { return live.card ? live.card.dataset.key : null; },
   };
