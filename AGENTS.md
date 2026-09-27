@@ -94,6 +94,18 @@ v1.0.0 のように複数の PR にまたがる版は、途中の状態を本番
 - 本番の不具合は main に直接直して PATCH で出し、統合ブランチにも取り込む
 - 最後の PR でバージョンを上げ、統合ブランチの PR を main にマージするとリリースされる
 
+## 作業の進め方（エージェント向けの申し合わせ）
+
+- やりとりは日本語、時刻は JST で伝える
+- ブランチを作り直す（reset・強制プッシュ）前に、元の PR が GitHub 上で本当にマージ済みか（merged=true・コミットが取り込まれているか）を必ず確かめる。取り違えて開いている PR を閉じてしまった失敗がある
+- GitHub の PR を MCP で作ると本文の末尾に帰属のフッターが自動で付くので、作成後に本文を上書きして消す（下の「コミットと PR」の決まり）
+- 統合ブランチ（`release/vX`）への小さな修正は、ユーザーの了承があれば PR を作らず直接プッシュしてよい（v1.0.0 の仕上げでそうした）。都度確認する
+- クラウドの作業環境での注意:
+  - Playwright の版とブラウザの実体が合わないので `CHROMIUM_PATH=/opt/pw-browsers/chromium npm test` で動かす
+  - 作例動画の作り直しに使う ffmpeg は `pip install imageio-ffmpeg` で入る静的ビルド（libx264 と libwebp_anim 入り）。`FFMPEG=$(python3 -c 'import imageio_ffmpeg;print(imageio_ffmpeg.get_ffmpeg_exe())')`
+  - 作業環境から `*.github.io`（本番・プレビュー）は開けない（プロキシで止まる）。公開の確認は Actions の結果とリリースで行う
+  - 手元の Chromium は H.264 が使えないので、Chrome でだけ通る分岐（作例動画の再生・H.264 の書き出し）は CI の結果で確かめる
+
 ## コミットと PR
 
 - 機能追加・修正の PR では `CHANGELOG.md` の `## [Unreleased]` に変更を書く（利用者に伝わる言葉で）
